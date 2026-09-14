@@ -1,0 +1,60 @@
+name: Weekly data refresh and deploy
+
+on:
+  schedule:
+    # Tuesdays 11:00 UTC (7 am Eastern), after Monday Night Football has been processed by nflverse
+    - cron: "0 11 * * 2"
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  refresh-and-deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install nflreadpy polars requests
+
+      - name: Rebuild the dataset from nflverse
+        run: python build_qb_games.py
+
+      - name: Commit refreshed data
+        run: |
+          git config user.name "qb-rankings-bot"
+          git config user.email "qb-rankings-bot@users.noreply.github.com"
+          git add data
+          git diff --cached --quiet || git commit -m "Data refresh $(date -u +%F)"
+          git push
+
+      - name: Assemble the site
+        run: |
+          mkdir -p site
+          cp index.html qb-game-rankings.jsx site/
+          cp -r data site/data
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+      - id: deployment
+        uses: actions/deploy-pages@v4
