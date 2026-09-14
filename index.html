@@ -34,7 +34,7 @@
     try {
       const src = await (await fetch("./qb-game-rankings.jsx", { cache: "no-store" })).text();
       const body = src.replace(/^import[^\n]*\n/gm, "").replace("export default function", "function");
-      const js = Babel.transform(body, { presets: ["react"], filename: "qb-game-rankings.jsx" }).code;
+      const js = Babel.transform(body, { presets: [["react", { runtime: "classic" }]], filename: "qb-game-rankings.jsx" }).code;
       const factory = new Function("React", "useState", "useEffect", "useMemo", "useRef", "Papa", js + "\n;return QBGameRankings;");
       const App = factory(React, React.useState, React.useEffect, React.useMemo, React.useRef, Papa);
       createRoot(document.getElementById("qb-rankings-root")).render(React.createElement(App));
