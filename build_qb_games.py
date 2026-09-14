@@ -86,7 +86,7 @@ def main():
 
     passers.write_csv(os.path.join(WORK_DIR, "qb_games_1999_to_now.csv"))
     n = write_json(passers, GAME_COLS, os.path.join(DATA_DIR, "qb_games.json"), {"built": today, "source": "nflverse stats_player"})
-    lo, hi = passers.select(pl.col("season").min(), pl.col("season").max()).row(0)
+    lo, hi = passers.select(pl.col("season").min().alias("lo"), pl.col("season").max().alias("hi")).row(0)
     print(f"Wrote data/qb_games.json: {n:,} QB game lines, seasons {lo}-{hi}")
 
     print("Downloading ESPN week-level QBR...")
