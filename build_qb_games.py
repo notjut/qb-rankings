@@ -3,7 +3,8 @@ build_qb_games.py
 Builds the data behind the QB Game Rankings site from nflverse (free, community maintained).
 
 What it writes:
-  data/qb_games.json   every qualifying QB game line since 1999
+  data/qb_games.json   every qualifying QB game line since 1999, with the final score, home or road,
+                       weather and whether he led a game-winning drive
   data/qbr.json        ESPN week-level QBR (2006 on)
   data/players.json    player id -> headshot photo URL
   data/teams.json      team abbreviation -> name and colors
@@ -50,7 +51,8 @@ GAME_COLS = [
     "season_type", "position", "completions", "attempts", "passing_yards", "passing_tds",
     "passing_interceptions", "sacks_suffered", "sack_yards_lost",
     "sack_fumbles_lost", "rushing_fumbles_lost", "receiving_fumbles_lost", "carries", "rushing_yards", "rushing_tds",
-    "gameday", "home", "team_score", "opp_score", "snap_share",
+    "gameday", "home", "neutral", "team_score", "opp_score", "snap_share",
+    "roof", "temp", "wind", "precip", "gwd",
 ]
 QBR_COLS = [
     "season", "season_type", "game_week", "team_abb", "name_short", "name_display", "name_first", "name_last",
@@ -108,9 +110,53 @@ def qb_snaps_for_season(season, qb_ids):
         (pl.col("my_snaps") / pl.when(pl.col("team_snaps") > 0).then(pl.col("team_snaps")).otherwise(None)).alias("snap_share"),
         (pl.col("my_qtrs") == pl.col("team_qtrs")).alias("all_qtrs"),
     )
-    return out.select(
+    snaps = out.select(
         pl.col("season").cast(pl.Int64), pl.col("week").cast(pl.Int64), pl.col("pid").alias("player_id"),
         "snap_share", "all_qtrs")
+    return snaps, game_winning_drives(pbp), precipitation(pbp)
+
+
+KEY_SCHEMA = {"season": pl.Int64, "week": pl.Int64, "team": pl.Utf8}
+
+
+def game_winning_drives(pbp):
+    """Teams whose offense took the lead for good in the 4th quarter or overtime (the usual game-winning-drive definition)."""
+    cols = ["game_id", "season", "week", "posteam", "qtr", "home_team", "away_team", "result",
+            "posteam_score", "defteam_score", "posteam_score_post", "defteam_score_post", "play_type"]
+    empty = pl.DataFrame(schema={**KEY_SCHEMA, "gwd": pl.Int64})
+    if any(c not in pbp.columns for c in cols):
+        return empty
+    lead = pbp.select(cols).with_row_index("n").filter(
+        pl.col("posteam").is_not_null()
+        & pl.col("play_type").is_in(["pass", "run", "field_goal", "extra_point"])
+        & (pl.col("posteam_score") <= pl.col("defteam_score"))
+        & (pl.col("posteam_score_post") > pl.col("defteam_score_post")))
+    if lead.height == 0:
+        return empty
+    last = lead.sort("n").group_by("game_id", maintain_order=True).agg(pl.all().last())
+    last = last.with_columns(
+        pl.when(pl.col("result") > 0).then(pl.col("home_team")).when(pl.col("result") < 0).then(pl.col("away_team")).otherwise(None).alias("winner"))
+    won = last.filter((pl.col("posteam") == pl.col("winner")) & (pl.col("qtr") >= 4))
+    return won.select(pl.col("season").cast(pl.Int64), pl.col("week").cast(pl.Int64), pl.col("posteam").alias("team"), pl.lit(1).cast(pl.Int64).alias("gwd"))
+
+
+def precipitation(pbp):
+    """Rain or snow, read from the game weather note. One row per team per game."""
+    empty = pl.DataFrame(schema={**KEY_SCHEMA, "precip": pl.Utf8})
+    cols = ["game_id", "season", "week", "home_team", "away_team", "weather"]
+    if any(c not in pbp.columns for c in cols):
+        return empty
+    g = pbp.select(cols).filter(pl.col("weather").is_not_null()).group_by("game_id", maintain_order=True).agg(pl.all().first())
+    wx = pl.col("weather").str.to_lowercase()
+    sure = ~wx.str.contains("chance")
+    g = g.with_columns(
+        pl.when(wx.str.contains("snow|flurr") & sure).then(pl.lit("snow"))
+        .when(wx.str.contains("rain|shower|drizzle") & sure).then(pl.lit("rain")).otherwise(None).alias("precip")
+    ).filter(pl.col("precip").is_not_null())
+    if g.height == 0:
+        return empty
+    rows = [g.select(pl.col("season").cast(pl.Int64), pl.col("week").cast(pl.Int64), pl.col(side).alias("team"), "precip") for side in ("home_team", "away_team")]
+    return pl.concat(rows)
 
 
 def schedule_lines():
@@ -118,12 +164,15 @@ def schedule_lines():
     s = to_polars(nfl.load_schedules(seasons=True))
     s = s.filter(pl.col("home_score").is_not_null())
     fix = lambda c: pl.col(c).replace(TEAM_FIX)
+    opt = lambda c, t: (pl.col(c).cast(t, strict=False) if c in s.columns else pl.lit(None, dtype=t)).alias(c)
+    neutral = ((pl.col("location") == "Neutral") if "location" in s.columns else pl.lit(False)).cast(pl.Int64).alias("neutral")
+    extra = [opt("roof", pl.Utf8), opt("temp", pl.Float64), opt("wind", pl.Float64), neutral]
     home = s.select(pl.col("season").cast(pl.Int64), pl.col("week").cast(pl.Int64), fix("home_team").alias("team"),
                     pl.col("gameday").cast(pl.Utf8), pl.lit(1).alias("home"),
-                    pl.col("home_score").cast(pl.Int64).alias("team_score"), pl.col("away_score").cast(pl.Int64).alias("opp_score"))
+                    pl.col("home_score").cast(pl.Int64).alias("team_score"), pl.col("away_score").cast(pl.Int64).alias("opp_score"), *extra)
     away = s.select(pl.col("season").cast(pl.Int64), pl.col("week").cast(pl.Int64), fix("away_team").alias("team"),
                     pl.col("gameday").cast(pl.Utf8), pl.lit(0).alias("home"),
-                    pl.col("away_score").cast(pl.Int64).alias("team_score"), pl.col("home_score").cast(pl.Int64).alias("opp_score"))
+                    pl.col("away_score").cast(pl.Int64).alias("team_score"), pl.col("home_score").cast(pl.Int64).alias("opp_score"), *extra)
     return pl.concat([home, away]).unique(subset=["season", "week", "team"])
 
 
@@ -154,12 +203,16 @@ def main():
     print(f"{passers.height:,} QB game lines before the full-game check, seasons {seasons[0]}-{seasons[-1]}")
 
     print("Reading play-by-play to find who played the whole game...")
-    parts = []
+    parts, gwds, wets = [], [], []
     for season in seasons:
-        part = qb_snaps_for_season(season, qb_ids)
+        part, gwd, wet = qb_snaps_for_season(season, qb_ids)
         parts.append(part)
-        print(f"  {season}: {part.height} QB appearances")
+        gwds.append(gwd)
+        wets.append(wet)
+        print(f"  {season}: {part.height} QB appearances, {gwd.height} game-winning drives, {wet.height // 2} rain or snow games")
     snaps = pl.concat(parts).unique(subset=["season", "week", "player_id"])
+    gwd_all = pl.concat(gwds).unique(subset=["season", "week", "team"])
+    wet_all = pl.concat(wets).unique(subset=["season", "week", "team"])
 
     passers = passers.join(snaps, on=["season", "week", "player_id"], how="left")
     unverified = passers.filter(pl.col("snap_share").is_null()).height
@@ -177,6 +230,11 @@ def main():
     except Exception as e:  # scores are a nice-to-have; never block the refresh on them
         print(f"  could not add scores: {e}")
 
+    full = full.join(gwd_all, on=["season", "week", "team"], how="left").join(wet_all, on=["season", "week", "team"], how="left")
+    full = full.with_columns(pl.col("gwd").fill_null(0))
+    n_gwd = int(full["gwd"].sum())
+    n_wet = full.filter(pl.col("precip").is_not_null()).height
+    print(f"  game-winning drives credited: {n_gwd:,}; rain or snow games: {n_wet:,}")
     full = full.with_columns(pl.col("snap_share").round(3)).sort(["season", "week"])
     n = write_json(full, GAME_COLS, os.path.join(DATA_DIR, "qb_games.json"),
                    {"built": today, "source": "nflverse stats_player + pbp", "rule": "full games only", "dropped_partial": dropped})
