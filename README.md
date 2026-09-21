@@ -2,7 +2,7 @@
 
 Every full NFL quarterback game since 1999, ranked best to worst. The site rebuilds itself every Tuesday morning from nflverse.
 
-Live site: https://notjut.github.io/qb-rankings/
+Live site: https://qbranks.com
 
 ## What is on the page
 
