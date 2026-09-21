@@ -46,9 +46,7 @@ jobs:
       - name: Assemble the site
         run: |
           mkdir -p site
-          cp index.html site/
-          [ -f app.js ] && cp app.js site/ || true
-          [ -f qb-game-rankings.jsx ] && cp qb-game-rankings.jsx site/ || true
+          cp index.html app.js site/
           cp -r data site/data
 
       - uses: actions/upload-pages-artifact@v3
