@@ -14,15 +14,12 @@ permissions:
   id-token: write
 
 concurrency:
-  group: pages
+  group: pages-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
   refresh-and-deploy:
     runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
 
@@ -34,6 +31,8 @@ jobs:
         run: pip install nflreadpy polars requests
 
       - name: Rebuild the dataset from nflverse
+        env:
+          NFLREADPY_CACHE: "off"
         run: python build_qb_games.py
 
       - name: Commit refreshed data
@@ -47,14 +46,24 @@ jobs:
       - name: Assemble the site
         run: |
           mkdir -p site
-          cp index.html qb-game-rankings.jsx site/
+          cp index.html site/
+          [ -f app.js ] && cp app.js site/ || true
+          [ -f qb-game-rankings.jsx ] && cp qb-game-rankings.jsx site/ || true
           cp -r data site/data
-
-      - uses: actions/configure-pages@v5
 
       - uses: actions/upload-pages-artifact@v3
         with:
           path: site
 
+  deploy:
+    # Only the main branch publishes; other branches just rebuild data so changes can be tested safely.
+    if: github.ref == 'refs/heads/main'
+    needs: refresh-and-deploy
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/configure-pages@v5
       - id: deployment
         uses: actions/deploy-pages@v4
