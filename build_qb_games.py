@@ -13,8 +13,12 @@ FULL-GAME RULE
 A game only counts if the quarterback played the whole game. Using play-by-play, a QB
 qualifies when (a) he took at least 90% of his team's quarterback snaps that we can see
 (dropbacks, kneel-downs, spikes) and (b) he appears in every one of the four quarters in
-which his team's quarterbacks had a play. Starters who left hurt, were benched, or were
-rested, and the backups who replaced them, are dropped.
+which his team's quarterbacks had a play. Starters who left hurt or were rested, and the
+backups who replaced them, are dropped.
+
+BENCHED STARTERS STILL COUNT
+A starter who was pulled for poor play is kept: he took his team's first snap, left in the
+second half while trailing by 14 or more, never came back, and no play notes him as injured.
 
 Run by the GitHub Actions workflow every week:
     pip install nflreadpy polars requests
@@ -44,6 +48,7 @@ except Exception:
 DATA_DIR = "data"
 QBR_URL = "https://github.com/nflverse/nflverse-data/releases/download/espn_data/qbr_week_level.csv"
 MIN_SNAP_SHARE = 0.90
+BENCH_MARGIN = 14
 TEAM_FIX = {"OAK": "LV", "SD": "LAC", "STL": "LA"}
 
 GAME_COLS = [
@@ -52,7 +57,7 @@ GAME_COLS = [
     "passing_interceptions", "sacks_suffered", "sack_yards_lost",
     "sack_fumbles_lost", "rushing_fumbles_lost", "receiving_fumbles_lost", "carries", "rushing_yards", "rushing_tds",
     "gameday", "home", "neutral", "team_score", "opp_score", "snap_share",
-    "roof", "temp", "wind", "precip", "gwd",
+    "roof", "temp", "wind", "precip", "gwd", "benched", "exit_qtr", "exit_margin",
 ]
 QBR_COLS = [
     "season", "season_type", "game_week", "team_abb", "name_short", "name_display", "name_first", "name_last",
@@ -86,33 +91,48 @@ def write_json(df, wanted_cols, path, extra):
 
 
 def qb_snaps_for_season(season, qb_ids):
-    """One row per (season, week, player_id): snap share among his team's QBs and quarters he appeared in."""
+    """Per (season, week, player_id): snap share among his team's QBs, quarters he appeared in, and whether he was benched."""
     pbp = to_polars(nfl.load_pbp(seasons=[season]))
-    need = ["season", "week", "posteam", "qtr", "passer_player_id", "rusher_player_id", "qb_dropback", "qb_kneel", "qb_spike"]
+    need = ["game_id", "season", "week", "posteam", "qtr", "passer_player_id", "rusher_player_id", "passer_player_name",
+            "rusher_player_name", "qb_dropback", "qb_kneel", "qb_spike", "posteam_score", "defteam_score", "desc"]
     missing = [c for c in need if c not in pbp.columns]
     if missing:
         sys.exit(f"Play-by-play for {season} is missing columns: {missing}")
-    p = pbp.select(need).filter(pl.col("posteam").is_not_null() & (pl.col("qtr") <= 4))
+    p = pbp.select(need).with_row_index("n").filter(pl.col("posteam").is_not_null() & (pl.col("qtr") <= 4))
+    snap = ((pl.col("qb_dropback") == 1) | (pl.col("qb_kneel") == 1) | (pl.col("qb_spike") == 1)).fill_null(False).alias("snap")
+    margin = (pl.col("posteam_score") - pl.col("defteam_score")).alias("margin")
+    base = ["n", "game_id", "season", "week", "posteam", "qtr"]
     # every play a quarterback is credited on, as passer or runner
-    a = p.select("season", "week", "posteam", "qtr", pl.col("passer_player_id").alias("pid"),
-                 ((pl.col("qb_dropback") == 1) | (pl.col("qb_kneel") == 1) | (pl.col("qb_spike") == 1)).alias("snap"))
+    a = p.select(*base, pl.col("passer_player_id").alias("pid"), pl.col("passer_player_name").alias("name"), snap, margin)
     b = p.filter(pl.col("passer_player_id").is_null()).select(
-        "season", "week", "posteam", "qtr", pl.col("rusher_player_id").alias("pid"),
-        ((pl.col("qb_dropback") == 1) | (pl.col("qb_kneel") == 1) | (pl.col("qb_spike") == 1)).alias("snap"))
-    plays = pl.concat([a, b]).filter(pl.col("pid").is_not_null() & pl.col("pid").is_in(list(qb_ids)))
-    plays = plays.with_columns(pl.col("snap").fill_null(False))
+        *base, pl.col("rusher_player_id").alias("pid"), pl.col("rusher_player_name").alias("name"), snap, margin)
+    plays = pl.concat([a, b]).filter(pl.col("pid").is_not_null() & pl.col("pid").is_in(list(qb_ids))).sort("n")
 
-    team_q = plays.group_by("season", "week", "posteam").agg(
-        pl.col("snap").sum().alias("team_snaps"), pl.col("qtr").n_unique().alias("team_qtrs"))
-    mine = plays.group_by("season", "week", "posteam", "pid").agg(
-        pl.col("snap").sum().alias("my_snaps"), pl.col("qtr").n_unique().alias("my_qtrs"))
-    out = mine.join(team_q, on=["season", "week", "posteam"], how="left").with_columns(
+    keys = ["season", "week", "posteam"]
+    team_q = plays.group_by(keys).agg(pl.col("snap").sum().alias("team_snaps"), pl.col("qtr").n_unique().alias("team_qtrs"))
+    mine = plays.group_by(keys + ["pid"]).agg(
+        pl.col("snap").sum().alias("my_snaps"), pl.col("qtr").n_unique().alias("my_qtrs"), pl.col("game_id").first())
+    snaps_only = plays.filter(pl.col("snap"))
+    order = snaps_only.group_by(keys, maintain_order=True).agg(pl.col("pid").first().alias("starter"), pl.col("pid").last().alias("closer"))
+    exits = snaps_only.group_by(keys + ["pid"], maintain_order=True).agg(
+        pl.col("qtr").last().alias("exit_qtr"), pl.col("margin").last().alias("exit_margin"), pl.col("name").drop_nulls().last().alias("name"))
+    hurt = pbp.select("game_id", "desc").filter(pl.col("desc").is_not_null() & pl.col("desc").str.contains("was injured")).group_by("game_id").agg(
+        pl.col("desc").str.join(" | ").alias("injury_notes"))
+
+    out = (mine.join(team_q, on=keys, how="left").join(order, on=keys, how="left")
+           .join(exits, on=keys + ["pid"], how="left").join(hurt, on="game_id", how="left"))
+    injured = pl.col("injury_notes").fill_null("").str.contains(
+        pl.concat_str([pl.lit("-"), pl.col("name").fill_null("?"), pl.lit(" was injured")]), literal=True)
+    out = out.with_columns(
         (pl.col("my_snaps") / pl.when(pl.col("team_snaps") > 0).then(pl.col("team_snaps")).otherwise(None)).alias("snap_share"),
         (pl.col("my_qtrs") == pl.col("team_qtrs")).alias("all_qtrs"),
+        # benched for poor play: the starter, pulled in the second half while trailing by two scores or more, never returned, no injury noted
+        ((pl.col("pid") == pl.col("starter")) & (pl.col("pid") != pl.col("closer")) & (pl.col("exit_qtr") >= 3)
+         & (pl.col("exit_margin") <= -BENCH_MARGIN) & ~injured).fill_null(False).alias("benched"),
     )
     snaps = out.select(
         pl.col("season").cast(pl.Int64), pl.col("week").cast(pl.Int64), pl.col("pid").alias("player_id"),
-        "snap_share", "all_qtrs")
+        "snap_share", "all_qtrs", "benched", pl.col("exit_qtr").cast(pl.Int64), pl.col("exit_margin").cast(pl.Int64))
     return snaps, game_winning_drives(pbp), precipitation(pbp)
 
 
@@ -216,7 +236,14 @@ def main():
 
     passers = passers.join(snaps, on=["season", "week", "player_id"], how="left")
     unverified = passers.filter(pl.col("snap_share").is_null()).height
-    full = passers.filter((pl.col("snap_share") >= MIN_SNAP_SHARE) & pl.col("all_qtrs"))
+    whole = (pl.col("snap_share") >= MIN_SNAP_SHARE) & pl.col("all_qtrs")
+    full = passers.filter(whole | pl.col("benched").fill_null(False))
+    full = full.with_columns(
+        (pl.col("benched").fill_null(False) & ~whole.fill_null(False)).cast(pl.Int64).alias("benched"),
+    ).with_columns(
+        pl.when(pl.col("benched") == 1).then(pl.col("exit_qtr")).otherwise(None).alias("exit_qtr"),
+        pl.when(pl.col("benched") == 1).then(pl.col("exit_margin")).otherwise(None).alias("exit_margin"))
+    print(f"  of those, {int(full['benched'].sum()):,} are starters who were benched while trailing by {BENCH_MARGIN}+ in the second half")
     dropped = passers.height - full.height
     print(f"Full games: {full.height:,}. Dropped {dropped:,} partial games ({unverified:,} of those had no play-by-play match).")
     if full.height < passers.height * 0.5:
