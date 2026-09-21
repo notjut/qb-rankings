@@ -15,7 +15,9 @@
     { key: "def", stat: null, label: "Defense faced", sign: 1 },
   ];
   const STAT_KEYS = ["yds", "cmpPct", "td", "to", "rating", "qbr", "rush", "sk"];
-  const MIN_ATT = 10, MIN_POOL = 60, MIN_DEF_GAMES = 6, PAGE = 50, BIG_TIME = 70, RECENT_WEEKS = 4;
+  const MIN_ATT = 10, MIN_POOL = 60, MIN_DEF_GAMES = 6, FIRST_PAGE = 10, PAGE = 50, BIG_TIME = 70, RECENT_WEEKS = 4;
+  // the situation: flat points added on top of the eight stat categories
+  const SITUATION = { win: 2, loss: -2, road: 1, home: -1, gwd: 3, freezing: 2, wind: 2, precip: 1.5, weatherCap: 4 };
 
   /* ---------- helpers ---------- */
   const $ = (id) => document.getElementById(id);
@@ -92,6 +94,8 @@
       td: ix("passing_tds"), int: ix("passing_interceptions"), sk: ix("sacks_suffered"), skY: ix("sack_yards_lost"),
       f1: ix("sack_fumbles_lost"), f2: ix("rushing_fumbles_lost"), f3: ix("receiving_fumbles_lost"), ra: ix("carries"), ry: ix("rushing_yards"),
       rtd: ix("rushing_tds"), date: ix("gameday"), home: ix("home"), ts: ix("team_score"), os: ix("opp_score"), share: ix("snap_share"),
+      neutral: ix("neutral"), roof: ix("roof"), temp: ix("temp"), wind: ix("wind"), precip: ix("precip"), gwd: ix("gwd"),
+      benched: ix("benched"), exitQ: ix("exit_qtr"), exitM: ix("exit_margin"),
     };
     const g = (row, i) => (i < 0 ? null : row[i]);
     const out = [];
@@ -109,6 +113,8 @@
         sk: num(g(row, I.sk)) || 0, skY: Math.abs(num(g(row, I.skY)) || 0), fl: fl.length ? fl.reduce((a, b) => a + b, 0) : 0,
         ra: num(g(row, I.ra)) || 0, ry: num(g(row, I.ry)) || 0, rtd: num(g(row, I.rtd)) || 0,
         date: g(row, I.date), home: num(g(row, I.home)), ts: num(g(row, I.ts)), os: num(g(row, I.os)), share: num(g(row, I.share)),
+        neutral: num(g(row, I.neutral)) === 1, roof: g(row, I.roof), temp: num(g(row, I.temp)), wind: num(g(row, I.wind)), precip: g(row, I.precip),
+        gwd: num(g(row, I.gwd)) === 1, benched: num(g(row, I.benched)) === 1, exitQ: num(g(row, I.exitQ)), exitM: num(g(row, I.exitM)),
         qbr: null,
       });
     }
@@ -139,6 +145,29 @@
       rating: passerRating(r.cmp, r.att, r.yds, r.td, r.int), sk: r.sk,
       any: den > 0 ? (r.yds + 20 * r.td - 45 * r.int - r.skY) / den : null,
     };
+  }
+  function situation(r) {
+    const items = [];
+    if (r.ts !== null && r.os !== null && r.ts !== r.os) {
+      const won = r.ts > r.os;
+      items.push({ key: "result", label: won ? "Won the game" : "Lost the game", detail: `${r.ts}–${r.os}`, pts: won ? SITUATION.win : SITUATION.loss, phrase: won ? "winning the game" : "losing the game" });
+    }
+    if (r.gwd) items.push({ key: "gwd", label: "Game-winning drive", detail: "Took the lead for good late", pts: SITUATION.gwd, phrase: "a game-winning drive" });
+    if (!r.neutral && r.home !== null) {
+      items.push(r.home === 0
+        ? { key: "venue", label: "Road game", detail: "Away from home", pts: SITUATION.road, phrase: "playing on the road" }
+        : { key: "venue", label: "Home game", detail: "Home crowd", pts: SITUATION.home, phrase: "playing at home" });
+    }
+    const outdoors = r.roof === "outdoors" || r.roof === "open" || (!r.roof && r.temp !== null);
+    if (outdoors) {
+      const bits = [];
+      let pts = 0;
+      if (r.temp !== null && r.temp <= 32) { bits.push(`${Math.round(r.temp)}°F`); pts += SITUATION.freezing; }
+      if (r.wind !== null && r.wind >= 20) { bits.push(`${Math.round(r.wind)} mph wind`); pts += SITUATION.wind; }
+      if (r.precip) { bits.push(r.precip); pts += SITUATION.precip; }
+      if (bits.length) items.push({ key: "weather", label: "Bad weather", detail: bits.join(" · "), pts: Math.min(pts, SITUATION.weatherCap), phrase: `bad weather (${bits.join(", ")})` });
+    }
+    return items;
   }
   function computeModel(rows) {
     const add = (acc, k, v) => { if (v === null || v === undefined || !Number.isFinite(v)) return; const a = acc[k] || (acc[k] = { n: 0, s: 0, ss: 0 }); a.n++; a.s += v; a.ss += v * v; };
@@ -207,7 +236,9 @@
       let total = 0;
       for (const c of COMPONENTS) { pts[c.key] = z[c.key] === null ? null : (10 * c.sign * WEIGHTS[c.key] * z[c.key]) / wsq; total += pts[c.key] || 0; }
       const hay = `${r.player} ${r.team} ${nick(r.team, r.season)} ${r.opp} ${nick(r.opp, r.season)} ${r.season} week ${r.week} ${r.st === "POST" ? "playoffs postseason " + weekLabel(r) : "regular"}`.toLowerCase();
-      scored.push({ r, d, z, pts, avg, score: 50 + total, effSrc, defRank, defCount, pool, hay });
+      const sit = situation(r);
+      for (const it of sit) total += it.pts;
+      scored.push({ r, d, z, pts, avg, sit, score: 50 + total, effSrc, defRank, defCount, pool, hay });
     }
     scored.sort((a, b) => b.score - a.score || b.r.yds - a.r.yds);
     scored.forEach((s, i) => { s.rank = i + 1; });
@@ -231,6 +262,14 @@
     if (r.ry || r.rtd) bits.push(`${r.ry} rush yds${r.rtd ? `, ${r.rtd} rush TD` : ""}`);
     return bits.join(" · ");
   }
+  function tags(r) {
+    const t = [], outside = r.roof === "outdoors" || r.roof === "open";
+    if (r.gwd) t.push("Game-winning drive");
+    if (outside && r.temp !== null && r.temp <= 32) t.push(`${Math.round(r.temp)}°F`);
+    if (outside && r.precip) t.push(r.precip);
+    if (r.benched) t.push("Benched");
+    return t;
+  }
   function topPct(s, N) { const p = (s.rank / N) * 100; return p <= 1 ? "Top 1%" : p <= 50 ? `Top ${Math.ceil(p)}%` : `Bottom ${Math.max(1, Math.ceil(100 - p))}%`; }
   function phrase(s, key) {
     const r = s.r, d = s.d, good = s.pts[key] > 0;
@@ -247,13 +286,14 @@
     return key;
   }
   function explain(s, N) {
-    const keys = COMPONENTS.map((c) => c.key).filter((k) => s.pts[k] !== null);
-    const helped = keys.filter((k) => s.pts[k] >= 1.5).sort((a, b) => s.pts[b] - s.pts[a]).slice(0, 3);
-    const hurt = keys.filter((k) => s.pts[k] <= -1.5).sort((a, b) => s.pts[a] - s.pts[b]).slice(0, 3);
+    const all = COMPONENTS.map((c) => c.key).filter((k) => s.pts[k] !== null).map((k) => ({ pts: s.pts[k], text: phrase(s, k) }))
+      .concat(s.sit.map((it) => ({ pts: it.pts, text: it.phrase })));
+    const helped = all.filter((x) => x.pts >= 1.5).sort((a, b) => b.pts - a.pts).slice(0, 4).map((x) => x.text);
+    const hurt = all.filter((x) => x.pts <= -1.5).sort((a, b) => a.pts - b.pts).slice(0, 4).map((x) => x.text);
     const better = ((N - s.rank) / N) * 100;
-    const out = [`Ranked #${int(s.rank)} of ${int(N)} full games. Better than ${better >= 99.95 ? "99.9" : better < 0.05 ? "0" : one(better)}% of them.`];
-    out.push(helped.length ? `What lifted it: ${joinAnd(helped.map((k) => phrase(s, k)))}.` : "Nothing stood out on the plus side.");
-    out.push(hurt.length ? `What held it back: ${joinAnd(hurt.map((k) => phrase(s, k)))}.` : "Nothing held it back.");
+    const out = [`Ranked #${int(s.rank)} of ${int(N)} games. Better than ${better >= 99.95 ? "99.9" : better < 0.05 ? "0" : one(better)}% of them.`];
+    out.push(helped.length ? `What lifted it: ${joinAnd(helped)}.` : "Nothing stood out on the plus side.");
+    out.push(hurt.length ? `What held it back: ${joinAnd(hurt)}.` : "Nothing held it back.");
     return out;
   }
 
@@ -268,62 +308,80 @@
       (url ? `<img src="${esc(url)}" alt="" loading="lazy" decoding="async" onerror="this.remove()">` : "") +
       (stripe ? `<span class="stripe" style="background:${esc(c2)}"></span>` : "") + `</span>`;
   }
+  const tagText = (r) => { const t = tags(r); return t.length ? ` · ${t.join(" · ")}` : ""; };
   function card(s, N, tag) {
     const r = s.r;
     return `<button type="button" class="card" data-id="${esc(r.id)}">${photo(s, 480, true)}
       <span class="row1"><span>${esc(r.player)}</span><span>${one(s.score)}</span></span>
       <span class="meta" style="display:block">${esc(matchup(r))} · ${esc(tag || when(r))}</span>
       <span class="meta" style="display:block">${esc(statLine(r))}</span>
-      <span class="meta" style="display:block">All-time #${int(s.rank)} · ${topPct(s, N)}</span></button>`;
+      <span class="meta" style="display:block">All-time #${int(s.rank)} · ${topPct(s, N)}${esc(tagText(r))}</span></button>`;
   }
+  const grid = (list, N, tagFn) => `<div class="grid">${list.map((s, i) => card(s, N, tagFn ? tagFn(s, i) : null)).join("")}</div>`;
+
   function renderWeek(scored, N, latest) {
     const games = scored.filter((s) => s.r.season === latest.season && s.r.week === latest.week);
-    if (!games.length) { $("week").hidden = true; return new Set(); }
+    const shown = new Set();
+    if (!games.length) { $("week").hidden = true; return shown; }
     const top = games[0], r = top.r;
     const label = r.st === "POST" ? weekLabel(r) : `Week ${latest.week}`;
-    let html = `<h2>${esc(label)} recap <span>${latest.season} season · ${plural(games.length, "full game")}</span></h2>
+    let html = `<h2>${esc(label)} recap <span>${latest.season} season · ${plural(games.length, "game")}</span></h2>
       <button type="button" class="hero" data-id="${esc(r.id)}">${photo(top, 960, true)}
         <span><span class="tag" style="display:block">Game of the week</span>
         <span class="name" style="display:block">${esc(r.player)}</span>
         <span style="display:block">${esc(matchup(r))}${resultText(r) ? " · " + esc(resultText(r)) : ""}</span>
-        <span class="meta" style="display:block">${esc(statLine(r))}</span>
+        <span class="meta" style="display:block">${esc(statLine(r))}${esc(tagText(r))}</span>
         <span class="big" style="display:block">${one(top.score)}</span>
         <span class="meta" style="display:block">All-time #${int(top.rank)} of ${int(N)} · ${topPct(top, N)}</span>
         <span class="why-link">See why</span></span></button>`;
-    const rest = games.slice(1, 5);
-    if (rest.length) html += `<div class="grid">${rest.map((s, i) => card(s, N, `#${i + 2} this week`)).join("")}</div>`;
-    if (games.length >= 6) {
-      const low = games[games.length - 1];
-      html += `<p class="meta" style="margin:36px 0 0">Toughest day: <button type="button" data-id="${esc(low.r.id)}" style="border-bottom:1px solid currentColor">${esc(low.r.player)}, ${one(low.score)}</button></p>`;
-    }
+    const best = games.slice(1, 5);
+    if (best.length) html += `<h3 class="subhead">Best of the week</h3>${grid(best, N, (s, i) => `#${i + 2} this week`)}`;
+    const worst = games.length >= 9 ? games.slice(-4).reverse() : [];
+    if (worst.length) html += `<h3 class="subhead">Worst of the week</h3>${grid(worst, N, (s, i) => (i === 0 ? "Lowest this week" : `#${i + 1} lowest this week`))}`;
     $("weekBody").innerHTML = html;
-    return new Set(games.slice(0, 5));
+    [top, ...best, ...worst].forEach((s) => shown.add(s));
+    return shown;
   }
-  function renderBigTime(scored, N, latest, shown) {
+  function renderRecent(scored, N, latest, shown) {
     const pool = scored.filter((s) => s.r.season === latest.season && s.r.week > latest.week - RECENT_WEEKS && !shown.has(s));
     let picks = pool.filter((s) => s.score >= BIG_TIME);
     if (picks.length < 4) picks = pool.slice(0, 4);
     picks = picks.slice(0, 8);
-    if (!picks.length) { $("bigtime").hidden = true; return; }
-    $("bigBody").innerHTML = `<h2>Big-time performances <span>Best of the last ${RECENT_WEEKS} weeks</span></h2>
-      <div class="grid" style="margin-top:0">${picks.map((s) => card(s, N)).join("")}</div>`;
+    const taken = new Set(picks);
+    const worst = pool.filter((s) => !taken.has(s)).slice(-4).reverse();
+    if (!picks.length) { $("recent").hidden = true; return; }
+    $("recentBody").innerHTML = `<h2>Last ${RECENT_WEEKS} weeks <span>${latest.season} season</span></h2>
+      <h3 class="subhead" style="margin-top:0">Big-time performances</h3>${grid(picks, N)}` +
+      (worst.length ? `<h3 class="subhead">Worst of the last ${RECENT_WEEKS} weeks</h3>${grid(worst, N)}` : "");
+  }
+  function renderWorst(scored, N) {
+    const worst = scored.slice(-8).reverse();
+    $("worstBody").innerHTML = `<h2>Worst of all time <span>The bottom of ${int(N)} games</span></h2>${grid(worst, N)}
+      <button type="button" class="btn" id="fullWorst">See the full worst-first list</button>`;
   }
   function row(s) {
     const r = s.r;
     return `<button type="button" class="g" data-id="${esc(r.id)}"><span class="rank">#${int(s.rank)}</span>${photo(s, 96, false)}
       <span style="min-width:0"><span class="nm" style="display:block">${esc(r.player)}</span>
-      <span class="sub" style="display:block">${esc(matchup(r))} · ${esc(when(r))}</span>
+      <span class="sub" style="display:block">${esc(matchup(r))} · ${esc(when(r))}${esc(tagText(r))}</span>
       <span class="line" style="display:block">${esc(statLine(r))}</span></span><span class="sc">${one(s.score)}</span></button>`;
   }
 
   /* ---------- explanation sheet ---------- */
-  function openSheet(s, N, onPlayer) {
-    const r = s.r, d = s.d, { c1 } = colors(r.team);
-    const maxPts = Math.max(8, ...COMPONENTS.map((c) => Math.abs(s.pts[c.key] || 0)));
-    const val = {
+  const ORD = ["", "1st", "2nd", "3rd", "4th"];
+  function values(s) {
+    const r = s.r, d = s.d;
+    return {
       yds: int(r.yds), td: String(r.td), to: String(d.to), eff: s.effSrc === "qbr" ? one(r.qbr) : one(d.rating), cmp: `${Math.round(d.cmpPct)}%`,
       rush: `${r.ry} yds${r.rtd ? ` + ${r.rtd} TD` : ""}`, sk: String(r.sk), def: s.defRank ? `#${s.defRank} of ${s.defCount}` : "—",
     };
+  }
+  const signed = (p) => (p === null || p === undefined ? "n/a" : (p >= 0 ? "+" : "−") + one(Math.abs(p)));
+  function openSheet(s, N, actions) {
+    const r = s.r, { c1 } = colors(r.team);
+    const allPts = COMPONENTS.map((c) => s.pts[c.key] || 0).concat(s.sit.map((it) => it.pts));
+    const maxPts = Math.max(8, ...allPts.map(Math.abs));
+    const val = values(s);
     const avgText = (k) => {
       const a = s.avg[k];
       if (a === undefined) return "—";
@@ -332,15 +390,19 @@
       if (k === "rush") return `${Math.round(a)} yds`;
       return one(a);
     };
-    const rows = COMPONENTS.map((c) => {
-      const p = s.pts[c.key];
-      const label = c.key === "eff" ? (s.effSrc === "qbr" ? "QBR" : "Passer rating") : c.label;
-      const w = p === null ? 0 : (Math.abs(p) / maxPts) * 50;
-      const bar = p === null ? "" : p >= 0 ? `<i class="pos" style="width:${w}%;background:${esc(c1 === "#FFFFFF" ? "#000" : c1)}"></i>` : `<i class="neg" style="width:${w}%"></i>`;
-      return `<tr><td>${esc(label)}</td><td class="v">${esc(val[c.key])}</td><td class="v avg">${avgText(c.key)}</td>
-        <td style="width:36%;padding-left:14px"><div class="bar">${bar}</div></td><td class="v">${p === null ? "n/a" : (p >= 0 ? "+" : "−") + one(Math.abs(p))}</td></tr>`;
-    }).join("");
-    const poolNote = s.pool === "season" ? `every other full game of the ${r.season} season` : s.pool === "decade" ? `full games from the ${Math.floor(r.season / 10) * 10}s, because the ${r.season} season is still young` : "every full game on record";
+    const bar = (p) => {
+      if (p === null) return "";
+      const w = (Math.abs(p) / maxPts) * 50;
+      return p >= 0 ? `<i class="pos" style="width:${w}%;background:${esc(readableOn(c1) === "#000" ? "#000" : c1)}"></i>` : `<i class="neg" style="width:${w}%"></i>`;
+    };
+    const line = (label, value, avg, p) => `<tr><td>${esc(label)}</td><td class="v">${esc(value)}</td><td class="v avg">${esc(avg)}</td>
+      <td style="width:34%;padding-left:14px"><div class="bar">${bar(p)}</div></td><td class="v">${signed(p)}</td></tr>`;
+    const statRows = COMPONENTS.map((c) => line(c.key === "eff" ? (s.effSrc === "qbr" ? "QBR" : "Passer rating") : c.label, val[c.key], avgText(c.key), s.pts[c.key])).join("");
+    const sitRows = s.sit.map((it) => line(it.label, it.detail, "", it.pts)).join("");
+    const poolNote = s.pool === "season" ? `every other game of the ${r.season} season` : s.pool === "decade" ? `games from the ${Math.floor(r.season / 10) * 10}s, because the ${r.season} season is still young` : "every game on record";
+    const countNote = r.benched
+      ? ` He started and was pulled in the ${ORD[r.exitQ] || "second half"}${r.exitQ ? " quarter" : ""} trailing by ${Math.abs(r.exitM)}, with no injury noted, so it counts.`
+      : r.share !== null ? ` He took ${Math.round(r.share * 100)}% of his team's quarterback snaps, so it counts as a full game.` : "";
     const say = explain(s, N);
     const sheet = $("sheet");
     sheet.innerHTML = `<div class="sheet">
@@ -354,13 +416,57 @@
         <div class="r"><div>#${int(s.rank)} of ${int(N)}</div><div class="meta">${topPct(s, N)} all-time · 50 is average</div></div></div>
       <p class="say">${esc(say[0])}</p><p class="say">${esc(say[1])}</p><p class="say">${esc(say[2])}</p>
       <h3>Where the points came from</h3>
-      <div style="overflow-x:auto"><table class="bk"><thead><tr><th>Category</th><th class="v">This game</th><th class="v avg">${r.season} average</th><th></th><th class="v">Points</th></tr></thead>
-      <tbody>${rows}</tbody></table></div>
+      <div style="overflow-x:auto"><table class="bk"><thead><tr><th>The stats</th><th class="v">This game</th><th class="v avg">${r.season} average</th><th></th><th class="v">Points</th></tr></thead>
+      <tbody>${statRows}</tbody>
+      ${sitRows ? `<thead><tr><th colspan="5" style="padding-top:26px">The situation</th></tr></thead><tbody>${sitRows}</tbody>` : ""}</table></div>
       <p class="note" style="margin-top:16px">Start at 50, add the points column, and you get ${one(s.score)}. Solid bars add points. Striped bars take them away.</p>
-      <p class="note">Measured against ${esc(poolNote)}.${r.share !== null ? ` He took ${Math.round(r.share * 100)}% of his team's quarterback snaps, so it counts as a full game.` : ""}</p>
-      <button type="button" class="btn" id="allBy">All games by ${esc(r.player)}</button></div>`;
+      <p class="note">Stats are measured against ${esc(poolNote)}.${esc(countNote)}</p>
+      <div class="btns"><button type="button" class="btn" id="cmpStart">Compare with another game</button>
+      <button type="button" class="btn" id="allBy">All games by ${esc(r.player)}</button></div></div>`;
     $("closeSheet").onclick = () => sheet.close();
-    $("allBy").onclick = () => { sheet.close(); onPlayer(r.player); };
+    $("allBy").onclick = () => { sheet.close(); actions.showPlayer(r.player); };
+    $("cmpStart").onclick = () => { sheet.close(); actions.startCompare(s); };
+    if (!sheet.open) sheet.showModal();
+    sheet.scrollTop = 0;
+  }
+
+  /* ---------- side by side ---------- */
+  function openCompare(a, b, N, actions) {
+    const va = values(a), vb = values(b);
+    const head = (s) => `<div class="side">${photo(s, 480, true)}<div class="meta">${esc(when(s.r))}</div><div class="cname">${esc(s.r.player)}</div>
+      <div class="meta">${esc(matchup(s.r))}${resultText(s.r) ? " · " + esc(resultText(s.r)) : ""}</div>
+      <div class="cscore">${one(s.score)}</div><div class="meta">#${int(s.rank)} of ${int(N)}</div></div>`;
+    const diffs = [];
+    const line = (label, ta, pa, tb, pb) => {
+      const x = pa || 0, y = pb || 0;
+      diffs.push({ label, d: x - y });
+      const cls = (mine, other) => (mine > other + 0.05 ? "win" : mine < other - 0.05 ? "lose" : "");
+      return `<tr><td class="${cls(x, y)}">${esc(ta)}<small>${signed(pa)}</small></td><th>${esc(label)}</th><td class="${cls(y, x)}">${esc(tb)}<small>${signed(pb)}</small></td></tr>`;
+    };
+    let rows = COMPONENTS.map((c) => line(c.key === "eff" ? "QBR / rating" : c.label, va[c.key], a.pts[c.key], vb[c.key], b.pts[c.key])).join("");
+    const sitKeys = [["result", "Result"], ["gwd", "Game-winning drive"], ["venue", "Home or road"], ["weather", "Weather"]];
+    for (const [key, label] of sitKeys) {
+      const ia = a.sit.find((it) => it.key === key), ib = b.sit.find((it) => it.key === key);
+      if (!ia && !ib) continue;
+      const text = (it) => (!it ? "—" : key === "result" ? `${it.label.split(" ")[0]} ${it.detail}` : key === "gwd" ? "Yes" : key === "venue" ? it.label.split(" ")[0] : it.detail);
+      rows += line(label, text(ia), ia ? ia.pts : 0, text(ib), ib ? ib.pts : 0);
+    }
+    const gap = a.score - b.score, lead = gap >= 0 ? a : b, other = gap >= 0 ? b : a;
+    diffs.forEach((x) => { x.for = gap >= 0 ? x.d : -x.d; });
+    const edges = diffs.filter((x) => x.for >= 1).sort((p, q) => q.for - p.for).slice(0, 3).map((x) => `${x.label.toLowerCase()} (+${one(x.for)})`);
+    const verdict = Math.abs(gap) < 0.05 ? "A dead heat." : `${lead.r.player}'s game rates ${one(Math.abs(gap))} points higher than ${other.r.player}'s.` + (edges.length ? ` The biggest edges: ${joinAnd(edges)}.` : "");
+    const sheet = $("sheet");
+    sheet.innerHTML = `<div class="sheet">
+      <div class="sheet-top"><span>Side by side</span><button type="button" id="closeSheet">Close</button></div>
+      <div class="sides">${head(a)}${head(b)}</div>
+      <p class="say" style="margin-top:26px">${esc(verdict)}</p>
+      <table class="cmp"><tbody>${rows}</tbody></table>
+      <p class="note" style="margin-top:16px">Small numbers are the points each line added to or took from that game's score. Bold marks the better side.</p>
+      <div class="btns"><button type="button" class="btn" id="cmpAgain">Swap in a different second game</button>
+      <button type="button" class="btn" id="cmpDone">Done comparing</button></div></div>`;
+    $("closeSheet").onclick = () => sheet.close();
+    $("cmpAgain").onclick = () => { sheet.close(); $("all").scrollIntoView(); };
+    $("cmpDone").onclick = () => { sheet.close(); actions.endCompare(); };
     if (!sheet.open) sheet.showModal();
     sheet.scrollTop = 0;
   }
@@ -381,11 +487,12 @@
     const latest = { season: latestSeason, week: Math.max(...scored.filter((s) => s.r.season === latestSeason).map((s) => s.r.week)) };
     const latestGame = scored.find((s) => s.r.season === latest.season && s.r.week === latest.week);
 
-    $("status").textContent = `${int(N)} full games · ${seasons[seasons.length - 1]}–${latestSeason} · through ${when(latestGame.r)}${games.built ? ` · updated ${fmtDate(games.built)}` : ""}`;
-    const top = renderWeek(scored, N, latest);
-    renderBigTime(scored, N, latest, top);
+    $("status").textContent = `${int(N)} games · ${seasons[seasons.length - 1]}–${latestSeason} · through ${when(latestGame.r)}${games.built ? ` · updated ${fmtDate(games.built)}` : ""}`;
+    const shown = renderWeek(scored, N, latest);
+    renderRecent(scored, N, latest, shown);
+    renderWorst(scored, N);
 
-    const state = { q: "", season: "", type: "", order: "best", limit: PAGE };
+    const state = { q: "", season: "", type: "", order: "best", limit: FIRST_PAGE };
     $("fSeason").innerHTML = `<option value="">All seasons</option>` + seasons.map((y) => `<option value="${y}">${y}</option>`).join("");
     function renderList() {
       let list = scored, from = null;
@@ -398,12 +505,11 @@
       if (from) list = list.filter((s) => s.rank >= from);
       if (state.order === "worst") list = list.slice().reverse();
       const page = list.slice(0, state.limit);
-      $("allCount").textContent = `${int(N)} games`;
-      $("shown").textContent = list.length === N ? "Tap any game to see why it ranks where it does" : `${plural(list.length, "game")} found · rank shown is the all-time rank`;
+      $("shown").textContent = list.length === N ? `${int(N)} games · tap any game to see why it ranks where it does` : `${plural(list.length, "game")} found · rank shown is the all-time rank`;
       $("list").innerHTML = page.length ? page.map(row).join("") : `<p class="empty">No games match. Try a last name, a team or a year.</p>`;
       $("more").hidden = list.length <= state.limit;
     }
-    const reset = () => { state.limit = PAGE; renderList(); };
+    const reset = () => { state.limit = state.q || state.season || state.type || state.order !== "best" ? PAGE : FIRST_PAGE; renderList(); };
     let timer = null;
     $("q").addEventListener("input", (e) => { clearTimeout(timer); timer = setTimeout(() => { state.q = e.target.value; reset(); }, 120); });
     $("fSeason").addEventListener("change", (e) => { state.season = e.target.value; reset(); });
@@ -412,15 +518,33 @@
     $("more").addEventListener("click", () => { state.limit += PAGE; renderList(); });
     renderList();
 
-    const showPlayer = (name) => {
-      state.q = name; state.season = ""; state.type = ""; state.order = "best";
-      $("q").value = name; $("fSeason").value = ""; $("fType").value = ""; $("fOrder").value = "best";
+    const setFilters = (q, order) => {
+      state.q = q; state.season = ""; state.type = ""; state.order = order;
+      $("q").value = q; $("fSeason").value = ""; $("fType").value = ""; $("fOrder").value = order;
       reset();
       $("all").scrollIntoView();
     };
+    $("fullWorst").addEventListener("click", () => setFilters("", "worst"));
+
+    let compareA = null;
+    const bar = $("cmpbar");
+    const actions = {
+      showPlayer: (name) => setFilters(name, "best"),
+      startCompare: (s) => {
+        compareA = s;
+        $("cmpText").textContent = `Comparing ${s.r.player}, ${when(s.r)}. Now tap any other game.`;
+        bar.hidden = false;
+        $("all").scrollIntoView();
+      },
+      endCompare: () => { compareA = null; bar.hidden = true; },
+    };
+    $("cmpCancel").addEventListener("click", actions.endCompare);
     document.addEventListener("click", (e) => {
       const el = e.target.closest("[data-id]");
-      if (el && byId.has(el.dataset.id)) openSheet(byId.get(el.dataset.id), N, showPlayer);
+      if (!el || !byId.has(el.dataset.id)) return;
+      const s = byId.get(el.dataset.id);
+      if (compareA && s !== compareA) openCompare(compareA, s, N, actions);
+      else openSheet(s, N, actions);
     });
     const sheet = $("sheet");
     sheet.addEventListener("click", (e) => { if (e.target === sheet) sheet.close(); });
