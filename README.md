@@ -1,42 +1,39 @@
 # QB Game Rankings
 
-Every NFL quarterback game since 1999, ranked best to worst with era- and defense-adjusted scoring, rebuilt automatically every week from nflverse.
+Every full NFL quarterback game since 1999, ranked best to worst. The site rebuilds itself every Tuesday morning from nflverse.
+
+Live site: https://notjut.github.io/qb-rankings/
+
+## What is on the page
+
+- **How it works**: five short points at the top explaining the score.
+- **Week recap**: the game of the week, the next four best, and the toughest day.
+- **Big-time performances**: the best games of the last four weeks.
+- **All-time rankings**: search by quarterback, team or season. Tap any game to see why it ranks where it does.
+
+## The rules of the ranking
+
+- Every game gets one score. 50 is average and every 10 points is one standard deviation.
+- Eight categories count, with fixed weights: turnovers 1.2, passing yards 1.0, QBR 1.0 (passer rating before 2006), touchdown passes 0.8, defense faced 0.7, completion rate 0.6, rushing 0.5, sacks taken 0.4.
+- Each category is compared with every other full game from the same season.
+- **Full games only.** Using play-by-play, a quarterback qualifies when he took at least 90% of his team's quarterback snaps and appears in all four quarters. Quarterbacks who left hurt, were benched or rested, and the backups who replaced them, are left out. At least 10 pass attempts are also required.
 
 ## Files
 
 | File | What it does |
 | --- | --- |
-| `index.html` | The site. Loads the app in the browser, no build step. |
-| `qb-game-rankings.jsx` | The app itself (also works as a Claude artifact). |
-| `build_qb_games.py` | Downloads every QB game line + QBR and writes `data/qb_games.json` and `data/qbr.json`. |
-| `.github/workflows/weekly-refresh.yml` | Runs the script every Tuesday morning and republishes the site. |
+| `index.html` | The page layout and styling. |
+| `app.js` | Loads the data, scores every game and draws the page. No libraries, no build step. |
+| `build_qb_games.py` | Downloads stats, play-by-play, schedules, photos and team colors from nflverse and writes the files in `data/`. |
+| `.github/workflows/weekly-refresh.yml` | Runs the script every Tuesday at 7 am Eastern and republishes the site. Only the `main` branch publishes. |
+| `qb-game-rankings.jsx` | The original version of the app, kept for reference. The site no longer uses it. |
 
-## Set up (about 10 minutes, one time)
+## Running the refresh by hand
 
-1. Create a new repository on GitHub (Public is fine; free Pages hosting requires it on a free account).
-2. Upload these files, keeping the folder path `.github/workflows/weekly-refresh.yml` intact. Name the default branch `main`.
-3. In the repository, open **Settings → Pages** and set **Source** to **GitHub Actions**.
-4. Open the **Actions** tab, pick **Weekly data refresh and deploy**, and click **Run workflow**. The first run downloads all seasons (a few minutes) and publishes the site.
-5. Your site is at `https://<your-username>.github.io/<repo-name>/`. Open it on any phone or computer.
-
-From then on the workflow runs by itself every Tuesday at 7 am Eastern. If GitHub pauses the schedule after a long quiet stretch (it does this on inactive repositories), one click on **Run workflow** re-enables it. The app's **Check nflverse for new games** button also pulls the current season on demand.
-
-## Run it on your own computer instead
-
-```
-pip install nflreadpy polars requests
-python build_qb_games.py
-python -m http.server 8000
-```
-
-Then open http://localhost:8000. Opening `index.html` directly as a file will not work; it has to be served.
-
-## Adding 1932–1998
-
-nflverse starts in 1999. For earlier seasons, export game logs from Stathead Football (Pro-Football-Reference's paid tool) with the Player Game Finder, then load each CSV through the app's Data tab; the column mapper handles their layout. Before 1932 no individual passing stats were recorded.
+Open the **Actions** tab, pick **Weekly data refresh and deploy**, and click **Run workflow**. If GitHub pauses the schedule after a long quiet stretch, that same click turns it back on.
 
 ## Data notes
 
-- Passing, rushing, sacks and lost fumbles come from nflverse `stats_player` (week level).
-- QBR comes from ESPN via nflverse `espn_data`, available from 2006. Earlier games use passer rating in its place.
-- Manual entries and hand-loaded CSVs persist in the Claude artifact version; on the hosted site they last for the session, since the site regenerates its data weekly.
+- Game stats, play-by-play, schedules, player photos and team colors come from nflverse.
+- QBR comes from ESPN via nflverse, available from 2006.
+- nflverse starts in 1999, so earlier seasons are not included.
