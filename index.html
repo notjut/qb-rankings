@@ -3,10 +3,10 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>QB Game Rankings</title>
-  <meta name="description" content="Every full NFL quarterback game since 1999, ranked best to worst. Weekly recap every Tuesday.">
+  <title>QBRANKS | Ranking every game ever played by an NFL QB</title>
+  <meta name="description" content="QBRANKS ranks every game played by an NFL quarterback, best to worst. Weekly recap every Tuesday.">
   <style>
-    :root { --ink: #000; --paper: #fff; --soft: #f4f4f4; --line: #e6e6e6; --mute: #767676; }
+    :root { --ink: #000; --paper: #fff; --soft: #f4f4f4; --line: #e6e6e6; --mute: #767676; --green: #00a651; }
     * { box-sizing: border-box; }
     html { scroll-behavior: smooth; scroll-padding-top: 64px; }
     body {
@@ -29,12 +29,33 @@
     .top nav a:hover { color: var(--ink); }
 
     section { padding-block: 56px; border-bottom: 1px solid var(--line); }
-    h1 { font-size: clamp(34px, 8vw, 84px); line-height: .95; letter-spacing: -.02em; margin: 0 0 18px; }
+    h1 { font-size: clamp(26px, 5.2vw, 60px); line-height: 1; letter-spacing: -.02em; margin: 0 0 16px; }
+    h1 .pipe { font-weight: 400; margin-inline: .28em; }
+    h1 .green { color: var(--green); }
+    #all { padding-top: 40px; }
+    .subhead { font-size: 12px; margin: 56px 0 0; padding-top: 18px; border-top: 1px solid var(--line); }
+    .subhead + .grid { margin-top: 22px; }
+    .btns { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 28px; }
+    .btns .btn { margin-top: 0; }
+    .cmpbar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 6; background: var(--ink); color: var(--paper); }
+    .cmpbar .wrap { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-height: 52px; padding-block: 10px; }
+    .cmpbar button { border-bottom: 1px solid currentColor; white-space: nowrap; }
+    .sides { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    .side .ph { aspect-ratio: 1 / 1; margin-bottom: 12px; }
+    .side .cname { font-size: clamp(16px, 3.4vw, 24px); line-height: 1.05; margin: 4px 0 6px; }
+    .side .cscore { font-size: clamp(36px, 8vw, 56px); line-height: .9; letter-spacing: -.03em; margin: 14px 0 4px; }
+    .cmp { width: 100%; border-collapse: collapse; margin-top: 22px; table-layout: fixed; }
+    .cmp td, .cmp th { padding: 11px 0; border-top: 1px solid var(--line); font-weight: 700; vertical-align: top; }
+    .cmp th { color: var(--mute); text-align: center; width: 34%; padding-inline: 8px; }
+    .cmp td { color: var(--mute); }
+    .cmp td:last-child { text-align: right; }
+    .cmp td.win { color: var(--ink); }
+    .cmp td small { display: block; font-size: 10px; color: var(--mute); margin-top: 2px; }
     h2 { font-size: 12px; margin: 0 0 28px; display: flex; justify-content: space-between; gap: 12px; }
     h2 span { color: var(--mute); }
     .status { color: var(--mute); margin: 0; }
 
-    .how { list-style: none; margin: 40px 0 0; padding: 0; display: grid; gap: 28px 32px; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); }
+    .how { list-style: none; margin: 0; padding: 0; display: grid; gap: 28px 32px; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); }
     .how li b { display: block; font-size: 22px; line-height: 1; margin-bottom: 10px; }
     .how li strong { display: block; margin-bottom: 6px; }
     .how li p { margin: 0; color: var(--mute); }
@@ -128,38 +149,23 @@
 <body id="top">
   <header class="top">
     <div class="wrap">
-      <a class="brand" href="#top">QB Game Rankings</a>
+      <a class="brand" href="#top">QBRANKS</a>
       <nav aria-label="Sections">
-        <a href="#how">How it works</a>
+        <a href="#all">Rankings</a>
         <a href="#week">This week</a>
-        <a href="#bigtime">Big time</a>
-        <a href="#all">All-time</a>
+        <a href="#recent">Last 4 weeks</a>
+        <a href="#worst">Worst ever</a>
+        <a href="#how">How it works</a>
       </nav>
     </div>
   </header>
 
   <main>
-    <section id="how">
-      <div class="wrap">
-        <h1>Every quarterback game. Ranked.</h1>
-        <p class="status" id="status">Loading games…</p>
-        <ol class="how">
-          <li><b>1</b><strong>One score per game</strong><p>50 is an average game. Every 10 points is one big step better or worse than average. 70 is excellent. 80 is historic.</p></li>
-          <li><b>2</b><strong>Eight things count</strong><p>Turnovers, passing yards and QBR matter most. Then touchdown passes, the defense he faced, completion rate, rushing and sacks taken.</p></li>
-          <li><b>3</b><strong>Judged against its own season</strong><p>Each game is compared with every other game that same year, so 300 yards in 2003 is worth more than 300 yards today.</p></li>
-          <li><b>4</b><strong>Full games only</strong><p>The quarterback must play all four quarters. If he left hurt, was benched or came in as a backup, the game does not count.</p></li>
-          <li><b>5</b><strong>Tap any game</strong><p>Every game opens to show exactly what pushed it up the list and what held it back.</p></li>
-        </ol>
-      </div>
-    </section>
-
-    <section id="week"><div class="wrap" id="weekBody"></div></section>
-    <section id="bigtime"><div class="wrap" id="bigBody"></div></section>
-
     <section id="all">
       <div class="wrap">
-        <h2>All-time rankings <span id="allCount"></span></h2>
-        <div class="controls">
+        <h1>QBRANKS<span class="pipe">|</span><span class="green">Ranking every game ever played by an NFL QB.</span></h1>
+        <p class="status" id="status">Loading games…</p>
+        <div class="controls" style="margin-top:32px">
           <input id="q" type="search" placeholder="Search a quarterback, team or season" aria-label="Search" autocomplete="off">
           <select id="fSeason" aria-label="Season"></select>
           <select id="fType" aria-label="Game type">
@@ -174,7 +180,25 @@
         </div>
         <p class="count" id="shown"></p>
         <div class="list" id="list"></div>
-        <button class="more" id="more" type="button" hidden>Show 50 more</button>
+        <button class="more" id="more" type="button" hidden>Show more</button>
+      </div>
+    </section>
+
+    <section id="week"><div class="wrap" id="weekBody"></div></section>
+    <section id="recent"><div class="wrap" id="recentBody"></div></section>
+    <section id="worst"><div class="wrap" id="worstBody"></div></section>
+
+    <section id="how">
+      <div class="wrap">
+        <h2>How the rankings work</h2>
+        <ol class="how">
+          <li><b>1</b><strong>One score per game</strong><p>50 is an average game. Every 10 points is one big step better or worse than average. 70 is excellent. 80 is historic.</p></li>
+          <li><b>2</b><strong>Eight stats count</strong><p>Turnovers, passing yards and QBR matter most. Then touchdown passes, the defense he faced, completion rate, rushing and sacks taken.</p></li>
+          <li><b>3</b><strong>Judged against its own season</strong><p>Each game is compared with every other game that same year, so 300 yards in 2003 is worth more than 300 yards today.</p></li>
+          <li><b>4</b><strong>The situation counts</strong><p>Winning adds 2 points and losing takes 2 away. A road game adds 1 and a home game takes 1 away. A game-winning drive adds 3. Freezing cold, heavy wind, rain or snow add up to 4.</p></li>
+          <li><b>5</b><strong>Real games only</strong><p>The quarterback has to play all four quarters. Leave hurt and it does not count. A starter benched for bad play still counts, because he earned it.</p></li>
+          <li><b>6</b><strong>Tap any game</strong><p>See what pushed it up, what held it back, or put two games side by side.</p></li>
+        </ol>
       </div>
     </section>
   </main>
@@ -185,6 +209,8 @@
       <p>Rebuilt every Tuesday morning after Monday Night Football.</p>
     </div>
   </footer>
+
+  <div class="cmpbar" id="cmpbar" hidden><div class="wrap"><span id="cmpText"></span><button type="button" id="cmpCancel">Cancel</button></div></div>
 
   <dialog id="sheet" aria-label="Why this game ranks where it does"></dialog>
   <noscript>This site needs JavaScript.</noscript>
