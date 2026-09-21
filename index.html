@@ -4,45 +4,190 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>QB Game Rankings</title>
-  <meta name="description" content="Every NFL quarterback game, ranked best to worst, era- and defense-adjusted. Updates weekly.">
-  <script src="https://cdn.tailwindcss.com"></script>
-  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-  <script type="importmap">
-  {
-    "imports": {
-      "react": "https://esm.sh/react@18.3.1",
-      "react-dom/client": "https://esm.sh/react-dom@18.3.1/client?deps=react@18.3.1",
-      "papaparse": "https://esm.sh/papaparse@5.4.1"
-    }
-  }
-  </script>
+  <meta name="description" content="Every full NFL quarterback game since 1999, ranked best to worst. Weekly recap every Tuesday.">
   <style>
-    html, body { margin: 0; background: #0d1b2a; color: #eaf0f7; }
-    #boot { padding: 24px 16px; font: 14px system-ui, sans-serif; color: #96a8bf; }
+    :root { --ink: #000; --paper: #fff; --soft: #f4f4f4; --line: #e6e6e6; --mute: #767676; }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; scroll-padding-top: 64px; }
+    body {
+      margin: 0; background: var(--paper); color: var(--ink);
+      font-family: Helvetica, "Helvetica Neue", Arial, sans-serif; font-weight: 700;
+      text-transform: uppercase; font-size: 12px; line-height: 1.45; letter-spacing: .03em;
+      -webkit-font-smoothing: antialiased;
+    }
+    a { color: inherit; text-decoration: none; }
+    button, input, select { font: inherit; color: inherit; text-transform: inherit; letter-spacing: inherit; }
+    button { cursor: pointer; background: none; border: 0; padding: 0; text-align: left; }
+    :focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+    .wrap { max-width: 1080px; margin: 0 auto; padding-inline: 20px; }
+
+    .top { position: sticky; top: 0; z-index: 5; background: var(--paper); border-bottom: 1px solid var(--line); }
+    .top .wrap { display: flex; align-items: center; justify-content: space-between; gap: 16px; height: 52px; }
+    .brand { font-size: 13px; white-space: nowrap; }
+    .top nav { display: flex; gap: 18px; overflow-x: auto; white-space: nowrap; }
+    .top nav a { color: var(--mute); padding-block: 6px; }
+    .top nav a:hover { color: var(--ink); }
+
+    section { padding-block: 56px; border-bottom: 1px solid var(--line); }
+    h1 { font-size: clamp(34px, 8vw, 84px); line-height: .95; letter-spacing: -.02em; margin: 0 0 18px; }
+    h2 { font-size: 12px; margin: 0 0 28px; display: flex; justify-content: space-between; gap: 12px; }
+    h2 span { color: var(--mute); }
+    .status { color: var(--mute); margin: 0; }
+
+    .how { list-style: none; margin: 40px 0 0; padding: 0; display: grid; gap: 28px 32px; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); }
+    .how li b { display: block; font-size: 22px; line-height: 1; margin-bottom: 10px; }
+    .how li strong { display: block; margin-bottom: 6px; }
+    .how li p { margin: 0; color: var(--mute); }
+
+    .hero { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 32px; align-items: end; width: 100%; }
+    .hero .ph { aspect-ratio: 4 / 3; }
+    .hero .tag { color: var(--mute); margin-bottom: 10px; }
+    .hero .name { font-size: clamp(26px, 5vw, 52px); line-height: .98; letter-spacing: -.01em; margin-bottom: 14px; }
+    .hero .big { font-size: clamp(44px, 9vw, 96px); line-height: .9; letter-spacing: -.03em; margin-top: 22px; }
+    .meta { color: var(--mute); }
+    .why-link { display: inline-block; margin-top: 18px; border-bottom: 2px solid var(--ink); padding-bottom: 2px; }
+
+    .grid { display: grid; gap: 32px 20px; grid-template-columns: repeat(4, minmax(0, 1fr)); align-items: start; margin-top: 40px; }
+    .card { display: block; width: 100%; }
+    .card .ph { aspect-ratio: 1 / 1; margin-bottom: 12px; }
+    .card .row1 { display: flex; justify-content: space-between; gap: 8px; }
+    .card:hover .ph, .hero:hover .ph { opacity: .88; }
+
+    .ph { position: relative; overflow: hidden; background: var(--soft); display: block; transition: opacity .15s; }
+    .ph img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; object-position: center top; display: block; }
+    .ph .ini { position: absolute; inset: 0; display: grid; place-items: center; font-size: 28px; letter-spacing: 0; }
+    .ph .stripe { position: absolute; left: 0; right: 0; bottom: 0; height: 6px; }
+
+    .controls { display: grid; gap: 10px; grid-template-columns: minmax(0, 2fr) repeat(3, minmax(0, 1fr)); margin-bottom: 8px; }
+    .controls input, .controls select {
+      width: 100%; height: 44px; padding: 0 12px; background: var(--paper); border: 1px solid var(--ink); border-radius: 0;
+      -webkit-appearance: none; appearance: none;
+    }
+    .controls select { background-image: linear-gradient(45deg, transparent 50%, #000 50%), linear-gradient(135deg, #000 50%, transparent 50%); background-position: calc(100% - 17px) 19px, calc(100% - 12px) 19px; background-size: 5px 5px; background-repeat: no-repeat; padding-right: 30px; }
+    .controls input::placeholder { color: var(--mute); }
+    .count { color: var(--mute); margin: 14px 0 0; }
+
+    .list { margin-top: 12px; }
+    .g { display: grid; grid-template-columns: 56px 48px minmax(0, 1fr) auto; gap: 14px; align-items: center; width: 100%; padding-block: 14px; border-top: 1px solid var(--line); }
+    .g:hover { background: var(--soft); }
+    .g .rank { font-size: 14px; }
+    .g .ph { width: 48px; height: 48px; border-radius: 50%; }
+    .g .ph .ini { font-size: 12px; }
+    .g .nm { font-size: 14px; }
+    .g .sc { font-size: 22px; letter-spacing: -.02em; text-align: right; }
+    .g .sub, .g .line { color: var(--mute); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .more { display: block; width: 100%; height: 48px; margin-top: 24px; border: 1px solid var(--ink); text-align: center; }
+    .more:hover, .btn:hover { background: var(--ink); color: var(--paper); }
+    .empty { padding-block: 40px; color: var(--mute); }
+
+    dialog { border: 0; padding: 0; width: min(760px, 100%); max-width: 100%; max-height: 100%; height: 100%; margin: 0 0 0 auto; background: var(--paper); color: var(--ink); }
+    dialog::backdrop { background: rgba(255, 255, 255, .82); }
+    .sheet { padding: 0 24px 56px; }
+    .sheet-top { position: sticky; top: 0; background: var(--paper); display: flex; justify-content: space-between; align-items: center; height: 52px; border-bottom: 1px solid var(--line); margin-bottom: 24px; z-index: 2; }
+    .sheet .ph { aspect-ratio: 16 / 9; margin-bottom: 22px; }
+    .sheet .name { font-size: clamp(26px, 6vw, 44px); line-height: 1; letter-spacing: -.01em; margin: 6px 0 10px; }
+    .sheet .scorebar { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; margin: 26px 0; padding-block: 18px; border-block: 1px solid var(--line); }
+    .sheet .scorebar .big { font-size: 64px; line-height: .85; letter-spacing: -.03em; }
+    .sheet .scorebar .r { text-align: right; }
+    .sheet h3 { font-size: 12px; margin: 34px 0 12px; }
+    .sheet p { margin: 0 0 10px; }
+    .sheet .say { font-size: 15px; line-height: 1.35; letter-spacing: .01em; }
+    .bk { width: 100%; border-collapse: collapse; }
+    .bk th, .bk td { padding: 10px 0; border-top: 1px solid var(--line); text-align: left; vertical-align: middle; font-weight: 700; }
+    .bk th { color: var(--mute); border-top: 0; padding-top: 0; }
+    .bk td.v, .bk th.v { text-align: right; padding-left: 10px; white-space: nowrap; }
+    .bk td.avg { color: var(--mute); }
+    .bar { position: relative; height: 10px; width: 100%; min-width: 70px; background: linear-gradient(var(--line), var(--line)) center / 1px 100% no-repeat; }
+    .bar i { position: absolute; top: 0; bottom: 0; display: block; }
+    .bar i.pos { left: 50%; background: var(--ink); }
+    .bar i.neg { right: 50%; background: repeating-linear-gradient(135deg, #000 0 2px, #fff 2px 5px); border: 1px solid #000; }
+    .note { color: var(--mute); }
+    .btn { display: inline-block; height: 44px; line-height: 42px; padding: 0 18px; border: 1px solid var(--ink); margin-top: 28px; }
+
+    footer { padding-block: 40px 64px; color: var(--mute); }
+    footer p { margin: 0 0 8px; max-width: 70ch; }
+
+    @media (max-width: 720px) {
+      section { padding-block: 40px; }
+      .hero { grid-template-columns: 1fr; gap: 20px; }
+      .controls { grid-template-columns: 1fr 1fr; }
+      .controls input { grid-column: 1 / -1; }
+      .controls .order { grid-column: 1 / -1; }
+      .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px 14px; }
+      .g { grid-template-columns: 40px 40px minmax(0, 1fr) auto; gap: 10px; }
+      .g .ph { width: 40px; height: 40px; }
+      .g .sc { font-size: 18px; }
+      .g .sub, .g .line { white-space: normal; }
+      .bk .avg { display: none; }
+      dialog { width: 100%; }
+      .sheet { padding-inline: 20px; }
+    }
+    @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
   </style>
 </head>
-<body>
-  <div id="qb-rankings-root"><div id="boot">Loading QB Game Rankings…</div></div>
-  <noscript>This app needs JavaScript.</noscript>
-  <script type="module">
-    import React from "react";
-    import { createRoot } from "react-dom/client";
-    import Papa from "papaparse";
+<body id="top">
+  <header class="top">
+    <div class="wrap">
+      <a class="brand" href="#top">QB Game Rankings</a>
+      <nav aria-label="Sections">
+        <a href="#how">How it works</a>
+        <a href="#week">This week</a>
+        <a href="#bigtime">Big time</a>
+        <a href="#all">All-time</a>
+      </nav>
+    </div>
+  </header>
 
-    // The app lives in qb-game-rankings.jsx (the same file used in the Claude artifact).
-    // Fetch it, drop the module import/export lines, compile the JSX in the browser and mount it.
-    try {
-      const src = await (await fetch("./qb-game-rankings.jsx", { cache: "no-store" })).text();
-      const body = src.replace(/^import[^\n]*\n/gm, "").replace("export default function", "function");
-      const js = Babel.transform(body, { presets: [["react", { runtime: "classic" }]], filename: "qb-game-rankings.jsx" }).code;
-      const factory = new Function("React", "useState", "useEffect", "useMemo", "useRef", "Papa", js + "\n;return QBGameRankings;");
-      const App = factory(React, React.useState, React.useEffect, React.useMemo, React.useRef, Papa);
-      createRoot(document.getElementById("qb-rankings-root")).render(React.createElement(App));
-    } catch (err) {
-      document.getElementById("boot").textContent = "Could not start the app: " + (err && err.message ? err.message : err) +
-        ". Open this page through a web server (GitHub Pages or `python -m http.server`), not as a local file.";
-      console.error(err);
-    }
-  </script>
+  <main>
+    <section id="how">
+      <div class="wrap">
+        <h1>Every quarterback game. Ranked.</h1>
+        <p class="status" id="status">Loading games…</p>
+        <ol class="how">
+          <li><b>1</b><strong>One score per game</strong><p>50 is an average game. Every 10 points is one big step better or worse than average. 70 is excellent. 80 is historic.</p></li>
+          <li><b>2</b><strong>Eight things count</strong><p>Turnovers, passing yards and QBR matter most. Then touchdown passes, the defense he faced, completion rate, rushing and sacks taken.</p></li>
+          <li><b>3</b><strong>Judged against its own season</strong><p>Each game is compared with every other game that same year, so 300 yards in 2003 is worth more than 300 yards today.</p></li>
+          <li><b>4</b><strong>Full games only</strong><p>The quarterback must play all four quarters. If he left hurt, was benched or came in as a backup, the game does not count.</p></li>
+          <li><b>5</b><strong>Tap any game</strong><p>Every game opens to show exactly what pushed it up the list and what held it back.</p></li>
+        </ol>
+      </div>
+    </section>
+
+    <section id="week"><div class="wrap" id="weekBody"></div></section>
+    <section id="bigtime"><div class="wrap" id="bigBody"></div></section>
+
+    <section id="all">
+      <div class="wrap">
+        <h2>All-time rankings <span id="allCount"></span></h2>
+        <div class="controls">
+          <input id="q" type="search" placeholder="Search a quarterback, team or season" aria-label="Search" autocomplete="off">
+          <select id="fSeason" aria-label="Season"></select>
+          <select id="fType" aria-label="Game type">
+            <option value="">All games</option>
+            <option value="REG">Regular season</option>
+            <option value="POST">Playoffs</option>
+          </select>
+          <select id="fOrder" class="order" aria-label="Order">
+            <option value="best">Best first</option>
+            <option value="worst">Worst first</option>
+          </select>
+        </div>
+        <p class="count" id="shown"></p>
+        <div class="list" id="list"></div>
+        <button class="more" id="more" type="button" hidden>Show 50 more</button>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="wrap">
+      <p>Game stats, play-by-play, photos and team colors from nflverse. QBR from ESPN, 2006 on. Earlier games use passer rating in its place.</p>
+      <p>Rebuilt every Tuesday morning after Monday Night Football.</p>
+    </div>
+  </footer>
+
+  <dialog id="sheet" aria-label="Why this game ranks where it does"></dialog>
+  <noscript>This site needs JavaScript.</noscript>
+  <script src="app.js"></script>
 </body>
 </html>
