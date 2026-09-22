@@ -40,4 +40,4 @@ Open the **Actions** tab, pick **Weekly data refresh and deploy**, and click **R
 
 - Game stats, play-by-play, schedules, player photos and team colors come from nflverse.
 - QBR comes from ESPN via nflverse, available from 2006.
-- nflverse starts in 1999, so earlier seasons are not included.
+- Games from 1932 to 1998 come from Pro-Football-Reference, exported once through a Stathead subscription into `data/qb_games_pre1999.json`. Play-by-play does not exist for those seasons, so the full-game check, weather, game-winning drives, comebacks and missing targets are not applied to them, and fumbles are only recorded from 1994. Every game with 10 or more pass attempts is included.
