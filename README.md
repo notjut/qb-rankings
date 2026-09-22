@@ -10,6 +10,7 @@ Live site: https://qbranks.com
 - **Side by side**: open a game, choose "Compare with another game", then tap any other game.
 - **Week recap**: the game of the week, the best four after it, and the worst four.
 - **Last 4 weeks**: big-time performances and the worst games.
+- **GOATs**: the 150 greatest quarterbacks, ranked by how many of their games rate 70 or higher. Ties go to games at 80+, then career average. Players are matched across the 1932–1998 and 1999+ sources by name.
 - **Worst of all time**: the bottom of the list.
 - **How it works**: six short points at the bottom of the page.
 
