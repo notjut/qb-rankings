@@ -49,6 +49,9 @@ DATA_DIR = "data"
 QBR_URL = "https://github.com/nflverse/nflverse-data/releases/download/espn_data/qbr_week_level.csv"
 MIN_SNAP_SHARE = 0.90
 BENCH_MARGIN = 14
+TARGET_WINDOW = 6       # a "regular" target is judged on the team's games within this many of the game in question
+TARGET_MIN_SHARE = 0.12  # at least this share of the team's targets in those games
+TARGET_MIN_GAMES = 0.6   # and present in at least this fraction of them
 TEAM_FIX = {"OAK": "LV", "SD": "LAC", "STL": "LA"}
 
 GAME_COLS = [
@@ -58,6 +61,7 @@ GAME_COLS = [
     "sack_fumbles_lost", "rushing_fumbles_lost", "receiving_fumbles_lost", "carries", "rushing_yards", "rushing_tds",
     "gameday", "home", "neutral", "team_score", "opp_score", "snap_share",
     "roof", "temp", "wind", "precip", "gwd", "benched", "exit_qtr", "exit_margin",
+    "kneel_yards", "missing_share", "missing_names",
 ]
 QBR_COLS = [
     "season", "season_type", "game_week", "team_abb", "name_short", "name_display", "name_first", "name_last",
@@ -133,7 +137,57 @@ def qb_snaps_for_season(season, qb_ids):
     snaps = out.select(
         pl.col("season").cast(pl.Int64), pl.col("week").cast(pl.Int64), pl.col("pid").alias("player_id"),
         "snap_share", "all_qtrs", "benched", pl.col("exit_qtr").cast(pl.Int64), pl.col("exit_margin").cast(pl.Int64))
-    return snaps, game_winning_drives(pbp), precipitation(pbp)
+    return snaps, game_winning_drives(pbp), precipitation(pbp), kneel_yards(pbp), missing_targets(pbp)
+
+
+def kneel_yards(pbp):
+    """Yards lost on kneel-downs per QB per game, so they can be taken out of his rushing line."""
+    need = ["season", "week", "rusher_player_id", "qb_kneel", "yards_gained"]
+    empty = pl.DataFrame(schema={"season": pl.Int64, "week": pl.Int64, "player_id": pl.Utf8, "kneel_yards": pl.Int64})
+    if any(c not in pbp.columns for c in need):
+        return empty
+    k = pbp.select(need).filter((pl.col("qb_kneel") == 1) & pl.col("rusher_player_id").is_not_null())
+    if k.height == 0:
+        return empty
+    return k.group_by("season", "week", "rusher_player_id").agg(pl.col("yards_gained").sum().alias("kneel_yards")).select(
+        pl.col("season").cast(pl.Int64), pl.col("week").cast(pl.Int64), pl.col("rusher_player_id").alias("player_id"), pl.col("kneel_yards").cast(pl.Int64))
+
+
+def missing_targets(pbp):
+    """Regular pass-catchers who did not touch the ball in a game. Judged against the team's nearby games, so a
+    receiver who only became a starter mid-season is not counted as 'missing' from games before that."""
+    need = ["game_id", "season", "week", "posteam", "play_type", "receiver_player_id", "receiver_player_name", "rusher_player_id"]
+    empty = pl.DataFrame(schema={**KEY_SCHEMA, "missing_share": pl.Float64, "missing_names": pl.Utf8})
+    if any(c not in pbp.columns for c in need):
+        return empty
+    p = pbp.select(need).filter(pl.col("posteam").is_not_null() & pl.col("play_type").is_in(["pass", "run"]))
+    order = p.select("season", "week").unique().sort(["season", "week"]).with_row_index("gi").with_columns(pl.col("gi").cast(pl.Int64))
+    tg = (p.filter((pl.col("play_type") == "pass") & pl.col("receiver_player_id").is_not_null())
+          .group_by("season", "week", "posteam", "receiver_player_id").agg(pl.len().alias("n"), pl.col("receiver_player_name").drop_nulls().first().alias("name"))
+          .join(order, on=["season", "week"]))
+    present = pl.concat([
+        p.select("season", "week", "posteam", pl.col("receiver_player_id").alias("pid")),
+        p.select("season", "week", "posteam", pl.col("rusher_player_id").alias("pid")),
+    ]).filter(pl.col("pid").is_not_null()).unique().join(order, on=["season", "week"])
+    team_games = p.select("season", "week", "posteam").unique().join(order, on=["season", "week"])
+    # every (team game, other team game within the window)
+    pairs = team_games.join(team_games.select("posteam", pl.col("gi").alias("gj")), on="posteam").filter(
+        (pl.col("gj") != pl.col("gi")) & ((pl.col("gj") - pl.col("gi")).abs() <= TARGET_WINDOW))
+    win_n = pairs.group_by("season", "week", "posteam").agg(pl.len().alias("games"))
+    tot = pairs.join(tg.select("posteam", pl.col("gi").alias("gj"), "receiver_player_id", "n", "name"), on=["posteam", "gj"]).group_by(
+        "season", "week", "posteam", "receiver_player_id").agg(pl.col("n").sum().alias("n"), pl.col("name").first())
+    team_tot = tot.group_by("season", "week", "posteam").agg(pl.col("n").sum().alias("team_n"))
+    pres_n = pairs.join(present.select("posteam", pl.col("gi").alias("gj"), pl.col("pid").alias("receiver_player_id")), on=["posteam", "gj"]).group_by(
+        "season", "week", "posteam", "receiver_player_id").agg(pl.len().alias("present_games"))
+    regs = (tot.join(team_tot, on=["season", "week", "posteam"]).join(win_n, on=["season", "week", "posteam"]).join(pres_n, on=["season", "week", "posteam", "receiver_player_id"], how="left")
+            .with_columns((pl.col("n") / pl.col("team_n")).alias("share"), pl.col("present_games").fill_null(0))
+            .filter((pl.col("games") >= 3) & (pl.col("share") >= TARGET_MIN_SHARE) & (pl.col("present_games") >= pl.col("games") * TARGET_MIN_GAMES)))
+    here = present.select("season", "week", "posteam", pl.col("pid").alias("receiver_player_id"), pl.lit(True).alias("here"))
+    miss = regs.join(here, on=["season", "week", "posteam", "receiver_player_id"], how="left").filter(pl.col("here").is_null())
+    if miss.height == 0:
+        return empty
+    return miss.group_by("season", "week", "posteam").agg(pl.col("share").sum().alias("missing_share"), pl.col("name").str.join(", ").alias("missing_names")).select(
+        pl.col("season").cast(pl.Int64), pl.col("week").cast(pl.Int64), pl.col("posteam").alias("team"), pl.col("missing_share").round(3), "missing_names")
 
 
 KEY_SCHEMA = {"season": pl.Int64, "week": pl.Int64, "team": pl.Utf8}
@@ -223,14 +277,18 @@ def main():
     print(f"{passers.height:,} QB game lines before the full-game check, seasons {seasons[0]}-{seasons[-1]}")
 
     print("Reading play-by-play to find who played the whole game...")
-    parts, gwds, wets = [], [], []
+    parts, gwds, wets, kneels, misses = [], [], [], [], []
     for season in seasons:
-        part, gwd, wet = qb_snaps_for_season(season, qb_ids)
+        part, gwd, wet, kn, ms = qb_snaps_for_season(season, qb_ids)
         parts.append(part)
         gwds.append(gwd)
         wets.append(wet)
-        print(f"  {season}: {part.height} QB appearances, {gwd.height} game-winning drives, {wet.height // 2} rain or snow games")
+        kneels.append(kn)
+        misses.append(ms)
+        print(f"  {season}: {part.height} QB appearances, {gwd.height} game-winning drives, {wet.height // 2} rain or snow games, {ms.height} games missing a regular target")
     snaps = pl.concat(parts).unique(subset=["season", "week", "player_id"])
+    kneel_all = pl.concat(kneels).unique(subset=["season", "week", "player_id"])
+    miss_all = pl.concat(misses).unique(subset=["season", "week", "team"])
     gwd_all = pl.concat(gwds).unique(subset=["season", "week", "team"])
     wet_all = pl.concat(wets).unique(subset=["season", "week", "team"])
 
@@ -258,7 +316,9 @@ def main():
         print(f"  could not add scores: {e}")
 
     full = full.join(gwd_all, on=["season", "week", "team"], how="left").join(wet_all, on=["season", "week", "team"], how="left")
-    full = full.with_columns(pl.col("gwd").fill_null(0))
+    full = full.join(kneel_all, on=["season", "week", "player_id"], how="left").join(miss_all, on=["season", "week", "team"], how="left")
+    full = full.with_columns(pl.col("gwd").fill_null(0), pl.col("kneel_yards").fill_null(0))
+    print(f"  kneel-down yards removed: {int(-full['kneel_yards'].sum()):,}; games missing a regular target: {full.filter(pl.col('missing_share').is_not_null()).height:,}")
     n_gwd = int(full["gwd"].sum())
     n_wet = full.filter(pl.col("precip").is_not_null()).height
     print(f"  game-winning drives credited: {n_gwd:,}; rain or snow games: {n_wet:,}")

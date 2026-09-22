@@ -3,9 +3,10 @@
   "use strict";
 
   /* ---------- the model (fixed; visitors cannot change it) ---------- */
-  const WEIGHTS = { to: 1.2, yds: 1.0, eff: 1.0, td: 0.8, def: 0.7, cmp: 0.6, rush: 0.5, sk: 0.4 };
+  const WEIGHTS = { to: 1.2, ypa: 1.0, yds: 0.7, td: 0.8, def: 0.7, cmp: 0.5, eff: 0.5, rush: 0.5, sk: 0.4 };
   const COMPONENTS = [
     { key: "yds", stat: "yds", label: "Passing yards", sign: 1 },
+    { key: "ypa", stat: "ypa", label: "Yards per attempt", sign: 1 },
     { key: "td", stat: "td", label: "Touchdown passes", sign: 1 },
     { key: "to", stat: "to", label: "Turnovers", sign: -1 },
     { key: "eff", stat: null, label: "QBR", sign: 1 },
@@ -14,10 +15,10 @@
     { key: "sk", stat: "sk", label: "Sacks taken", sign: -1 },
     { key: "def", stat: null, label: "Defense faced", sign: 1 },
   ];
-  const STAT_KEYS = ["yds", "cmpPct", "td", "to", "rating", "qbr", "rush", "sk"];
+  const STAT_KEYS = ["yds", "ypa", "cmpPct", "td", "to", "rating", "qbr", "rush", "sk"];
   const MIN_ATT = 10, MIN_POOL = 60, MIN_DEF_GAMES = 6, FIRST_PAGE = 10, PAGE = 50, BIG_TIME = 70, RECENT_WEEKS = 4;
   // the situation: flat points added on top of the eight stat categories
-  const SITUATION = { win: 2, loss: -2, road: 1, home: -1, gwd: 3, freezing: 2, wind: 2, precip: 1.5, weatherCap: 4 };
+  const SITUATION = { win: 2, loss: -2, road: 1, home: -1, gwd: 2, freezing: 2, wind: 2, precip: 1.5, weatherCap: 4, missingPerShare: 10, missingCap: 3 };
 
   /* ---------- helpers ---------- */
   const $ = (id) => document.getElementById(id);
@@ -95,7 +96,7 @@
       f1: ix("sack_fumbles_lost"), f2: ix("rushing_fumbles_lost"), f3: ix("receiving_fumbles_lost"), ra: ix("carries"), ry: ix("rushing_yards"),
       rtd: ix("rushing_tds"), date: ix("gameday"), home: ix("home"), ts: ix("team_score"), os: ix("opp_score"), share: ix("snap_share"),
       neutral: ix("neutral"), roof: ix("roof"), temp: ix("temp"), wind: ix("wind"), precip: ix("precip"), gwd: ix("gwd"),
-      benched: ix("benched"), exitQ: ix("exit_qtr"), exitM: ix("exit_margin"),
+      benched: ix("benched"), exitQ: ix("exit_qtr"), exitM: ix("exit_margin"), kneel: ix("kneel_yards"), missShare: ix("missing_share"), missNames: ix("missing_names"),
     };
     const g = (row, i) => (i < 0 ? null : row[i]);
     const out = [];
@@ -115,6 +116,7 @@
         date: g(row, I.date), home: num(g(row, I.home)), ts: num(g(row, I.ts)), os: num(g(row, I.os)), share: num(g(row, I.share)),
         neutral: num(g(row, I.neutral)) === 1, roof: g(row, I.roof), temp: num(g(row, I.temp)), wind: num(g(row, I.wind)), precip: g(row, I.precip),
         gwd: num(g(row, I.gwd)) === 1, benched: num(g(row, I.benched)) === 1, exitQ: num(g(row, I.exitQ)), exitM: num(g(row, I.exitM)),
+        kneel: num(g(row, I.kneel)) || 0, missShare: num(g(row, I.missShare)), missNames: g(row, I.missNames),
         qbr: null,
       });
     }
@@ -140,8 +142,11 @@
   /* ---------- scoring ---------- */
   function derive(r) {
     const den = r.att + r.sk;
+    const ryReal = r.ry - r.kneel; // kneel-downs are not rushing attempts in any meaningful sense
     return {
-      cmpPct: (r.cmp / r.att) * 100, to: r.int + r.fl, rush: r.ry + 20 * r.rtd,
+      cmpPct: (r.cmp / r.att) * 100, ypa: r.yds / r.att, to: r.int + r.fl, ryReal,
+      // rushing can only help: a quarterback who does not run is scored as average, never below
+      rush: Math.max(0, ryReal) + 20 * r.rtd,
       rating: passerRating(r.cmp, r.att, r.yds, r.td, r.int), sk: r.sk,
       any: den > 0 ? (r.yds + 20 * r.td - 45 * r.int - r.skY) / den : null,
     };
@@ -157,6 +162,11 @@
       items.push(r.home === 0
         ? { key: "venue", label: "Road game", detail: "Away from home", pts: SITUATION.road, phrase: "playing on the road" }
         : { key: "venue", label: "Home game", detail: "Home crowd", pts: SITUATION.home, phrase: "playing at home" });
+    }
+    if (r.missShare) {
+      const pts = Math.min(SITUATION.missingCap, Math.round(r.missShare * SITUATION.missingPerShare * 10) / 10);
+      const names = String(r.missNames || "").split(", ").filter(Boolean);
+      items.push({ key: "missing", label: "Missing top targets", detail: names.join(", "), pts, phrase: `playing without ${names.length > 1 ? "regular targets " : "a regular target, "}${joinAnd(names)}` });
     }
     const outdoors = r.roof === "outdoors" || r.roof === "open" || (!r.roof && r.temp !== null);
     if (outdoors) {
@@ -177,7 +187,7 @@
     const seasonAcc = new Map(), decadeAcc = new Map(), globalAcc = {}, defBySeason = new Map();
     for (const r of qual) {
       const d = derived.get(r);
-      const vals = { yds: r.yds, cmpPct: d.cmpPct, td: r.td, to: d.to, rating: d.rating, qbr: r.qbr, rush: d.rush, sk: d.sk };
+      const vals = { yds: r.yds, ypa: d.ypa, cmpPct: d.cmpPct, td: r.td, to: d.to, rating: d.rating, qbr: r.qbr, rush: d.rush, sk: d.sk };
       if (!seasonAcc.has(r.season)) seasonAcc.set(r.season, {});
       const dec = Math.floor(r.season / 10) * 10;
       if (!decadeAcc.has(dec)) decadeAcc.set(dec, {});
@@ -224,7 +234,9 @@
       let effSrc = "qbr";
       z.eff = r.qbr !== null ? zv("eff", "qbr", r.qbr) : null;
       if (z.eff === null) { z.eff = zv("eff", "rating", d.rating); effSrc = "rating"; }
-      z.rush = zv("rush", "rush", d.rush); z.sk = zv("sk", "sk", d.sk);
+      z.ypa = zv("ypa", "ypa", d.ypa);
+      z.rush = zv("rush", "rush", d.rush); if (z.rush !== null && z.rush < 0) z.rush = 0;
+      z.sk = zv("sk", "sk", d.sk);
       let defRank = null, defCount = null; z.def = null;
       const di = defInfo.get(r.season);
       if (di && d.any !== null) {
@@ -240,8 +252,21 @@
       for (const it of sit) total += it.pts;
       scored.push({ r, d, z, pts, avg, sit, score: 50 + total, effSrc, defRank, defCount, pool, hay });
     }
+    // Calibrate so the whole list really does average 50 with a spread of 10. The stat categories overlap
+    // (a big yardage day also lifts yards per attempt and QBR), so their raw sum spreads wider than 10.
+    const n = scored.length;
+    const mean = scored.reduce((a, s) => a + s.score, 0) / n;
+    const sd = Math.sqrt(scored.reduce((a, s) => a + (s.score - mean) * (s.score - mean), 0) / n) || 10;
+    const k = 10 / sd;
+    for (const s of scored) {
+      for (const key in s.pts) if (s.pts[key] !== null) s.pts[key] *= k;
+      for (const it of s.sit) it.pts *= k;
+      s.base = 50 - (mean - 50) * k; // where a game with zero points in every row lands
+      s.score = s.base + (s.score - 50) * k;
+    }
     scored.sort((a, b) => b.score - a.score || b.r.yds - a.r.yds);
     scored.forEach((s, i) => { s.rank = i + 1; });
+    window.__qb = { mean, sd, k, scored };
     return scored;
   }
 
@@ -259,7 +284,8 @@
   const when = (r) => `${r.season} ${weekLabel(r)}`;
   function statLine(r) {
     const bits = [`${r.cmp}/${r.att}`, `${int(r.yds)} yds`, `${r.td} TD`, `${r.int} INT`];
-    if (r.ry || r.rtd) bits.push(`${r.ry} rush yds${r.rtd ? `, ${r.rtd} rush TD` : ""}`);
+    const ry = r.ry - r.kneel;
+    if (ry > 0 || r.rtd) bits.push(`${ry} rush yds${r.rtd ? `, ${r.rtd} rush TD` : ""}`);
     return bits.join(" · ");
   }
   function tags(r) {
@@ -268,6 +294,7 @@
     if (outside && r.temp !== null && r.temp <= 32) t.push(`${Math.round(r.temp)}°F`);
     if (outside && r.precip) t.push(r.precip);
     if (r.benched) t.push("Benched");
+    if (r.missShare >= 0.15) t.push("Short-handed");
     return t;
   }
   function topPct(s, N) { const p = (s.rank / N) * 100; return p <= 1 ? "Top 1%" : p <= 50 ? `Top ${Math.ceil(p)}%` : `Bottom ${Math.max(1, Math.ceil(100 - p))}%`; }
@@ -279,7 +306,8 @@
       case "to": return d.to === 0 ? "no turnovers" : plural(d.to, "turnover");
       case "eff": return s.effSrc === "qbr" ? `a ${one(r.qbr)} QBR` : `a ${one(d.rating)} passer rating`;
       case "cmp": return `${Math.round(d.cmpPct)}% completions`;
-      case "rush": return `${good ? "" : "only "}${r.ry} rushing yards${r.rtd ? ` and ${plural(r.rtd, "rushing touchdown")}` : ""}`;
+      case "ypa": return `${one(d.ypa)} yards per attempt`;
+      case "rush": return `${d.ryReal} rushing yards${r.rtd ? ` and ${plural(r.rtd, "rushing touchdown")}` : ""}`;
       case "sk": return r.sk === 0 ? "no sacks taken" : plural(r.sk, "sack") + " taken";
       case "def": return `${good ? "a tough" : "a soft"} ${nick(r.opp, r.season)} defense${s.defRank ? ` (#${s.defRank} of ${s.defCount} against quarterbacks that year)` : ""}`;
     }
@@ -373,7 +401,7 @@
     const r = s.r, d = s.d;
     return {
       yds: int(r.yds), td: String(r.td), to: String(d.to), eff: s.effSrc === "qbr" ? one(r.qbr) : one(d.rating), cmp: `${Math.round(d.cmpPct)}%`,
-      rush: `${r.ry} yds${r.rtd ? ` + ${r.rtd} TD` : ""}`, sk: String(r.sk), def: s.defRank ? `#${s.defRank} of ${s.defCount}` : "—",
+      ypa: one(d.ypa), rush: `${d.ryReal} yds${r.rtd ? ` + ${r.rtd} TD` : ""}`, sk: String(r.sk), def: s.defRank ? `#${s.defRank} of ${s.defCount}` : "—",
     };
   }
   const signed = (p) => (p === null || p === undefined ? "n/a" : (p >= 0 ? "+" : "−") + one(Math.abs(p)));
@@ -388,6 +416,7 @@
       if (k === "cmp") return `${Math.round(a)}%`;
       if (k === "yds") return int(a);
       if (k === "rush") return `${Math.round(a)} yds`;
+      if (k === "ypa") return one(a);
       return one(a);
     };
     const bar = (p) => {
@@ -419,7 +448,7 @@
       <div style="overflow-x:auto"><table class="bk"><thead><tr><th>The stats</th><th class="v">This game</th><th class="v avg">${r.season} average</th><th></th><th class="v">Points</th></tr></thead>
       <tbody>${statRows}</tbody>
       ${sitRows ? `<thead><tr><th colspan="5" style="padding-top:26px">The situation</th></tr></thead><tbody>${sitRows}</tbody>` : ""}</table></div>
-      <p class="note" style="margin-top:16px">Start at 50, add the points column, and you get ${one(s.score)}. Solid bars add points. Striped bars take them away.</p>
+      <p class="note" style="margin-top:16px">Start at ${one(s.base)}, add the points column, and you get ${one(s.score)}. Solid bars add points. Striped bars take them away.</p>
       <p class="note">Stats are measured against ${esc(poolNote)}.${esc(countNote)}</p>
       <div class="btns"><button type="button" class="btn" id="cmpStart">Compare with another game</button>
       <button type="button" class="btn" id="allBy">All games by ${esc(r.player)}</button></div></div>`;
@@ -444,7 +473,7 @@
       return `<tr><td class="${cls(x, y)}">${esc(ta)}<small>${signed(pa)}</small></td><th>${esc(label)}</th><td class="${cls(y, x)}">${esc(tb)}<small>${signed(pb)}</small></td></tr>`;
     };
     let rows = COMPONENTS.map((c) => line(c.key === "eff" ? "QBR / rating" : c.label, va[c.key], a.pts[c.key], vb[c.key], b.pts[c.key])).join("");
-    const sitKeys = [["result", "Result"], ["gwd", "Game-winning drive"], ["venue", "Home or road"], ["weather", "Weather"]];
+    const sitKeys = [["result", "Result"], ["gwd", "Game-winning drive"], ["venue", "Home or road"], ["weather", "Weather"], ["missing", "Missing targets"]];
     for (const [key, label] of sitKeys) {
       const ia = a.sit.find((it) => it.key === key), ib = b.sit.find((it) => it.key === key);
       if (!ia && !ib) continue;
