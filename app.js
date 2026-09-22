@@ -413,9 +413,11 @@
     for (const s of scored) {
       const key = s.r.player.toLowerCase().replace(/[^a-z]/g, "");
       let p = byName.get(key);
-      if (!p) { p = { name: s.r.player, games: 0, great: 0, historic: 0, sum: 0, best: s, first: s.r.season, last: s.r.season, teams: new Map(), photoGame: null }; byName.set(key, p); }
+      if (!p) { p = { name: s.r.player, games: 0, great: 0, historic: 0, playoffWins: 0, titles: 0, sum: 0, best: s, first: s.r.season, last: s.r.season, teams: new Map(), photoGame: null }; byName.set(key, p); }
       p.games++; p.sum += s.score;
       if (s.score >= GOAT_BAR) p.great++;
+      const stake = s.sit.find((it) => it.key === "stakes");
+      if (stake) { if (stake.label === "Super Bowl win") p.titles++; else p.playoffWins++; }
       if (s.score >= GOAT_HIGH) p.historic++;
       if (s.score > p.best.score) p.best = s;
       if (s.r.season < p.first) p.first = s.r.season;
@@ -423,8 +425,10 @@
       p.teams.set(s.r.team, (p.teams.get(s.r.team) || 0) + 1);
       if (!p.photoGame || (HEADS[s.r.pid] && !HEADS[p.photoGame.r.pid])) p.photoGame = s;
     }
-    const list = [...byName.values()].filter((p) => p.great > 0);
-    list.sort((a, b) => b.great - a.great || b.historic - a.historic || b.sum / b.games - a.sum / a.games);
+    // greatness = great games + playoff wins, with a championship counting double
+    for (const p of byName.values()) p.total = p.great + p.playoffWins + 2 * p.titles;
+    const list = [...byName.values()].filter((p) => p.total > 0);
+    list.sort((a, b) => b.total - a.total || b.titles - a.titles || b.historic - a.historic || b.sum / b.games - a.sum / a.games);
     return list.slice(0, GOAT_COUNT).map((p, i) => ({ ...p, rank: i + 1, avg: p.sum / p.games, mainTeam: [...p.teams.entries()].sort((x, y) => y[1] - x[1])[0][0] }));
   }
   function goatRow(p) {
@@ -433,14 +437,14 @@
       <span style="min-width:0"><button type="button" class="nm goat-name" data-player="${esc(p.name)}" style="display:block">${esc(p.name)}</button>
       <span class="sub" style="display:block">${esc(nick(p.mainTeam, p.last))} · ${p.first === p.last ? p.first : `${p.first}–${p.last}`} · ${plural(p.games, "game")} · avg ${one(p.avg)}</span>
       <span class="line" style="display:block">Best: <button type="button" data-id="${esc(r.id === p.best.r.id ? r.id : p.best.r.id)}" style="border-bottom:1px solid currentColor">${one(p.best.score)} ${esc(matchup(p.best.r))}, ${esc(when(p.best.r))}</button></span></span>
-      <span class="sc" title="Games rated ${GOAT_BAR} or higher">${p.great}<small style="display:block;font-size:10px;color:var(--mute)">${p.historic} at ${GOAT_HIGH}+</small></span></div>`;
+      <span class="sc" title="Great games plus playoff wins, championships double">${p.total}<small style="display:block;font-size:10px;color:var(--mute)">${p.great} great · ${p.playoffWins + p.titles} playoff W · ${p.titles} title${p.titles === 1 ? "" : "s"}</small></span></div>`;
   }
   function renderGoats(scored) {
     const goats = buildGoats(scored);
     let limit = GOAT_FIRST;
     const draw = () => {
       $("goatsBody").innerHTML = `<h2>GOATs <span>The ${goats.length} greatest quarterbacks ever</span></h2>
-        <p class="meta" style="margin:-16px 0 24px">Ranked by how many games each man played that rate ${GOAT_BAR} or higher, one of the best games of that season. Ties go to games at ${GOAT_HIGH}+, then career average. The big number is the count.</p>
+        <p class="meta" style="margin:-16px 0 24px">The big number is great games plus playoff wins, with a championship counting double. A great game rates ${GOAT_BAR} or higher, one of the best of its season. Ties go to titles, then games at ${GOAT_HIGH}+, then career average.</p>
         <div class="list">${goats.slice(0, limit).map(goatRow).join("")}</div>
         ${limit < goats.length ? `<button type="button" class="more" id="moreGoats">Show ${Math.min(50, goats.length - limit)} more</button>` : ""}`;
       const btn = $("moreGoats");
