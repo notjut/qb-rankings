@@ -61,7 +61,7 @@ GAME_COLS = [
     "sack_fumbles_lost", "rushing_fumbles_lost", "receiving_fumbles_lost", "carries", "rushing_yards", "rushing_tds",
     "gameday", "home", "neutral", "team_score", "opp_score", "snap_share",
     "roof", "temp", "wind", "precip", "gwd", "benched", "exit_qtr", "exit_margin",
-    "kneel_yards", "missing_share", "missing_names",
+    "kneel_yards", "missing_share", "missing_names", "comeback",
 ]
 QBR_COLS = [
     "season", "season_type", "game_week", "team_abb", "name_short", "name_display", "name_first", "name_last",
@@ -137,7 +137,25 @@ def qb_snaps_for_season(season, qb_ids):
     snaps = out.select(
         pl.col("season").cast(pl.Int64), pl.col("week").cast(pl.Int64), pl.col("pid").alias("player_id"),
         "snap_share", "all_qtrs", "benched", pl.col("exit_qtr").cast(pl.Int64), pl.col("exit_margin").cast(pl.Int64))
-    return snaps, game_winning_drives(pbp), precipitation(pbp), kneel_yards(pbp), missing_targets(pbp)
+    return snaps, game_winning_drives(pbp), precipitation(pbp), kneel_yards(pbp), missing_targets(pbp), comebacks(pbp)
+
+
+def comebacks(pbp):
+    """Largest deficit each team faced in a game it went on to win."""
+    need = ["game_id", "season", "week", "home_team", "away_team", "total_home_score", "total_away_score", "result"]
+    empty = pl.DataFrame(schema={**KEY_SCHEMA, "comeback": pl.Int64})
+    if any(c not in pbp.columns for c in need):
+        return empty
+    g = pbp.select(need).filter(pl.col("result").is_not_null()).group_by("game_id").agg(
+        pl.col("season").first(), pl.col("week").first(), pl.col("home_team").first(), pl.col("away_team").first(), pl.col("result").first(),
+        (pl.col("total_home_score") - pl.col("total_away_score")).min().alias("home_low"),
+        (pl.col("total_away_score") - pl.col("total_home_score")).min().alias("away_low"))
+    home = g.filter(pl.col("result") > 0).select("season", "week", pl.col("home_team").alias("team"), (-pl.col("home_low")).alias("comeback"))
+    away = g.filter(pl.col("result") < 0).select("season", "week", pl.col("away_team").alias("team"), (-pl.col("away_low")).alias("comeback"))
+    out = pl.concat([home, away]).filter(pl.col("comeback") > 0)
+    if out.height == 0:
+        return empty
+    return out.select(pl.col("season").cast(pl.Int64), pl.col("week").cast(pl.Int64), "team", pl.col("comeback").cast(pl.Int64))
 
 
 def kneel_yards(pbp):
@@ -277,18 +295,20 @@ def main():
     print(f"{passers.height:,} QB game lines before the full-game check, seasons {seasons[0]}-{seasons[-1]}")
 
     print("Reading play-by-play to find who played the whole game...")
-    parts, gwds, wets, kneels, misses = [], [], [], [], []
+    parts, gwds, wets, kneels, misses, cbs = [], [], [], [], [], []
     for season in seasons:
-        part, gwd, wet, kn, ms = qb_snaps_for_season(season, qb_ids)
+        part, gwd, wet, kn, ms, cb = qb_snaps_for_season(season, qb_ids)
         parts.append(part)
         gwds.append(gwd)
         wets.append(wet)
         kneels.append(kn)
         misses.append(ms)
+        cbs.append(cb)
         print(f"  {season}: {part.height} QB appearances, {gwd.height} game-winning drives, {wet.height // 2} rain or snow games, {ms.height} games missing a regular target")
     snaps = pl.concat(parts).unique(subset=["season", "week", "player_id"])
     kneel_all = pl.concat(kneels).unique(subset=["season", "week", "player_id"])
     miss_all = pl.concat(misses).unique(subset=["season", "week", "team"])
+    cb_all = pl.concat(cbs).unique(subset=["season", "week", "team"])
     gwd_all = pl.concat(gwds).unique(subset=["season", "week", "team"])
     wet_all = pl.concat(wets).unique(subset=["season", "week", "team"])
 
@@ -317,7 +337,9 @@ def main():
 
     full = full.join(gwd_all, on=["season", "week", "team"], how="left").join(wet_all, on=["season", "week", "team"], how="left")
     full = full.join(kneel_all, on=["season", "week", "player_id"], how="left").join(miss_all, on=["season", "week", "team"], how="left")
-    full = full.with_columns(pl.col("gwd").fill_null(0), pl.col("kneel_yards").fill_null(0))
+    full = full.join(cb_all, on=["season", "week", "team"], how="left")
+    full = full.with_columns(pl.col("gwd").fill_null(0), pl.col("kneel_yards").fill_null(0), pl.col("comeback").fill_null(0))
+    print(f"  comeback wins from 14+ down: {full.filter(pl.col('comeback') >= 14).height:,}")
     print(f"  kneel-down yards removed: {int(-full['kneel_yards'].sum()):,}; games missing a regular target: {full.filter(pl.col('missing_share').is_not_null()).height:,}")
     n_gwd = int(full["gwd"].sum())
     n_wet = full.filter(pl.col("precip").is_not_null()).height
