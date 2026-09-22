@@ -3,27 +3,22 @@
   "use strict";
 
   /* ---------- the model (fixed; visitors cannot change it) ---------- */
-  const WEIGHTS = { to: 1.2, ypa: 1.0, yds: 0.7, td: 0.8, def: 0.7, cmp: 0.5, eff: 0.5, rush: 0.5, sk: 0.4 };
+  const WEIGHTS = { to: 1.2, yds: 1.0, td: 1.0, cmp: 0.8, ry: 0.6, rtd: 0.6, ypa: 0.5, def: 0.5 };
   const COMPONENTS = [
     { key: "yds", stat: "yds", label: "Passing yards", sign: 1 },
-    { key: "ypa", stat: "ypa", label: "Yards per attempt", sign: 1 },
     { key: "td", stat: "td", label: "Touchdown passes", sign: 1 },
     { key: "to", stat: "to", label: "Turnovers", sign: -1 },
-    { key: "eff", stat: null, label: "QBR", sign: 1 },
     { key: "cmp", stat: "cmpPct", label: "Completion rate", sign: 1 },
-    { key: "rush", stat: "rush", label: "Rushing", sign: 1 },
-    { key: "sk", stat: "sk", label: "Sacks taken", sign: -1 },
+    { key: "ry", stat: "ry", label: "Rushing yards", sign: 1 },
+    { key: "rtd", stat: "rtd", label: "Rushing touchdowns", sign: 1 },
+    { key: "ypa", stat: "ypa", label: "Yards per attempt", sign: 1 },
     { key: "def", stat: null, label: "Defense faced", sign: 1 },
   ];
-  const STAT_KEYS = ["yds", "ypa", "cmpPct", "td", "to", "rating", "qbr", "rush", "sk"];
+  const STAT_KEYS = ["yds", "ypa", "cmpPct", "td", "to", "ry", "rtd"];
   const Z_CAP = 3;
   const MIN_ATT = 10, MIN_POOL = 60, MIN_DEF_GAMES = 6, FIRST_PAGE = 10, PAGE = 50, BIG_TIME = 70, RECENT_WEEKS = 4;
   // the situation: flat points added on top of the eight stat categories
-  const SITUATION = { win: 2, loss: -2, road: 1, home: -1, gwd: 2, freezing: 2, wind: 2, precip: 1.5, weatherCap: 4, missingPerShare: 10, missingCap: 3 };
-  // the stakes: playoff rounds 1-4 (wild card to Super Bowl) add points for playing and more for winning
-  const STAKES = { play: [1, 1, 1.5, 2], win: [1, 1.5, 2, 4] };
-  // comebacks: points for the largest deficit overcome in a win
-  const COMEBACK = [[25, 4], [21, 3], [14, 2], [10, 1]];
+  const SITUATION = { win: 1, loss: 0, road: 1, home: 0, gwd: 1, weather: 1, missing: 1, missingMinShare: 0.1, comeback: 1, comebackFrom: 14, playoffWin: 1, superBowlWin: 2 };
 
   /* ---------- helpers ---------- */
   const $ = (id) => document.getElementById(id);
@@ -150,9 +145,7 @@
     const ryReal = r.ry - r.kneel; // kneel-downs are not rushing attempts in any meaningful sense
     return {
       cmpPct: (r.cmp / r.att) * 100, ypa: r.yds / r.att, to: r.int + r.fl, ryReal,
-      // rushing can only help: a quarterback who does not run is scored as average, never below
-      rush: Math.max(0, ryReal) + 20 * r.rtd,
-      rating: passerRating(r.cmp, r.att, r.yds, r.td, r.int), sk: r.sk,
+      ry: Math.max(0, ryReal), rtd: r.rtd,
       any: den > 0 ? (r.yds + 20 * r.td - 45 * r.int - r.skY) / den : null,
     };
   }
@@ -160,37 +153,26 @@
     const items = [];
     if (r.ts !== null && r.os !== null && r.ts !== r.os) {
       const won = r.ts > r.os;
-      items.push({ key: "result", label: won ? "Won the game" : "Lost the game", detail: `${r.ts}–${r.os}`, pts: won ? SITUATION.win : SITUATION.loss, phrase: won ? "winning the game" : "losing the game" });
+      if (won) items.push({ key: "result", label: "Won the game", detail: `${r.ts}–${r.os}`, pts: SITUATION.win, phrase: "winning the game" });
+      if (won && r.st === "POST") {
+        const sb = weekLabel(r) === "Super Bowl";
+        items.push({ key: "stakes", label: sb ? "Super Bowl win" : "Playoff win", detail: weekLabel(r), pts: sb ? SITUATION.superBowlWin : SITUATION.playoffWin, phrase: sb ? "winning the Super Bowl" : "winning a playoff game" });
+      }
     }
-    if (r.st === "POST") {
-      const round = Math.min(4, Math.max(1, r.week - (r.season >= 2021 ? 18 : 17))), name = weekLabel(r);
-      const won = r.ts !== null && r.os !== null && r.ts > r.os;
-      const pts = STAKES.play[round - 1] + (won ? STAKES.win[round - 1] : 0);
-      items.push({ key: "stakes", label: won ? `${name} win` : name, detail: won ? "Playoff win" : "Playoff game", pts, phrase: won ? `winning ${round === 4 ? "the Super Bowl" : "a " + name.toLowerCase() + " game"}` : `${round === 4 ? "the Super Bowl" : "a playoff game"}` });
-    }
-    if (r.comeback >= COMEBACK[COMEBACK.length - 1][0]) {
-      const [, pts] = COMEBACK.find(([d]) => r.comeback >= d);
-      items.push({ key: "comeback", label: "Comeback win", detail: `Trailed by ${r.comeback}`, pts, phrase: `a comeback from ${r.comeback} down` });
-    }
+    if (r.comeback >= SITUATION.comebackFrom) items.push({ key: "comeback", label: "Comeback win", detail: `Trailed by ${r.comeback}`, pts: SITUATION.comeback, phrase: `a comeback from ${r.comeback} down` });
     if (r.gwd) items.push({ key: "gwd", label: "Game-winning drive", detail: "Took the lead for good late", pts: SITUATION.gwd, phrase: "a game-winning drive" });
-    if (!r.neutral && r.home !== null) {
-      items.push(r.home === 0
-        ? { key: "venue", label: "Road game", detail: "Away from home", pts: SITUATION.road, phrase: "playing on the road" }
-        : { key: "venue", label: "Home game", detail: "Home crowd", pts: SITUATION.home, phrase: "playing at home" });
-    }
-    if (r.missShare) {
-      const pts = Math.min(SITUATION.missingCap, Math.round(r.missShare * SITUATION.missingPerShare * 10) / 10);
+    if (!r.neutral && r.home === 0) items.push({ key: "venue", label: "Road game", detail: "Away from home", pts: SITUATION.road, phrase: "playing on the road" });
+    if (r.missShare >= SITUATION.missingMinShare) {
       const names = String(r.missNames || "").split(", ").filter(Boolean);
-      items.push({ key: "missing", label: "Missing top targets", detail: names.join(", "), pts, phrase: `playing without ${names.length > 1 ? "regular targets " : "a regular target, "}${joinAnd(names)}` });
+      items.push({ key: "missing", label: "Missing a top target", detail: names.join(", "), pts: SITUATION.missing, phrase: `playing without ${names.length > 1 ? "regular targets " : "a regular target, "}${joinAnd(names)}` });
     }
     const outdoors = r.roof === "outdoors" || r.roof === "open" || (!r.roof && r.temp !== null);
     if (outdoors) {
       const bits = [];
-      let pts = 0;
-      if (r.temp !== null && r.temp <= 32) { bits.push(`${Math.round(r.temp)}°F`); pts += SITUATION.freezing; }
-      if (r.wind !== null && r.wind >= 20) { bits.push(`${Math.round(r.wind)} mph wind`); pts += SITUATION.wind; }
-      if (r.precip) { bits.push(r.precip); pts += SITUATION.precip; }
-      if (bits.length) items.push({ key: "weather", label: "Bad weather", detail: bits.join(" · "), pts: Math.min(pts, SITUATION.weatherCap), phrase: `bad weather (${bits.join(", ")})` });
+      if (r.temp !== null && r.temp <= 32) bits.push(`${Math.round(r.temp)}°F`);
+      if (r.wind !== null && r.wind >= 20) bits.push(`${Math.round(r.wind)} mph wind`);
+      if (r.precip) bits.push(r.precip);
+      if (bits.length) items.push({ key: "weather", label: "Bad weather", detail: bits.join(" · "), pts: SITUATION.weather, phrase: `bad weather (${bits.join(", ")})` });
     }
     return items;
   }
@@ -202,7 +184,7 @@
     const seasonAcc = new Map(), decadeAcc = new Map(), globalAcc = {}, defBySeason = new Map();
     for (const r of qual) {
       const d = derived.get(r);
-      const vals = { yds: r.yds, ypa: d.ypa, cmpPct: d.cmpPct, td: r.td, to: d.to, rating: d.rating, qbr: r.qbr, rush: d.rush, sk: d.sk };
+      const vals = { yds: r.yds, ypa: d.ypa, cmpPct: d.cmpPct, td: r.td, to: d.to, ry: d.ry, rtd: d.rtd };
       if (!seasonAcc.has(r.season)) seasonAcc.set(r.season, {});
       const dec = Math.floor(r.season / 10) * 10;
       if (!decadeAcc.has(dec)) decadeAcc.set(dec, {});
@@ -244,15 +226,13 @@
         if (!pool) pool = b.pool;
         avg[key] = b.m;
         const zz = (v - b.m) / b.sd;
-        return key === "ypa" ? clamp(zz, -Z_CAP, Z_CAP) : zz; // a rate stat runs wild on a few attempts, so it is capped
+        return key === "ypa" || key === "rtd" ? clamp(zz, -Z_CAP, Z_CAP) : zz; // these two run wild on small numbers, so they are capped
       };
       z.yds = zv("yds", "yds", r.yds); z.cmp = zv("cmp", "cmpPct", d.cmpPct); z.td = zv("td", "td", r.td); z.to = zv("to", "to", d.to);
-      let effSrc = "qbr";
-      z.eff = r.qbr !== null ? zv("eff", "qbr", r.qbr) : null;
-      if (z.eff === null) { z.eff = zv("eff", "rating", d.rating); effSrc = "rating"; }
       z.ypa = zv("ypa", "ypa", d.ypa);
-      z.rush = zv("rush", "rush", d.rush); if (z.rush !== null && z.rush < 0) z.rush = 0;
-      z.sk = zv("sk", "sk", d.sk);
+      // rushing can only help: a quarterback who does not run is scored as average, never below
+      z.ry = zv("ry", "ry", d.ry); if (z.ry !== null && z.ry < 0) z.ry = 0;
+      z.rtd = zv("rtd", "rtd", d.rtd); if (z.rtd !== null && z.rtd < 0) z.rtd = 0;
       let defRank = null, defCount = null; z.def = null;
       const di = defInfo.get(r.season);
       if (di && d.any !== null) {
@@ -266,7 +246,7 @@
       const hay = `${r.player} ${r.team} ${nick(r.team, r.season)} ${r.opp} ${nick(r.opp, r.season)} ${r.season} week ${r.week} ${r.st === "POST" ? "playoffs postseason " + weekLabel(r) : "regular"}`.toLowerCase();
       const sit = situation(r);
       for (const it of sit) total += it.pts;
-      scored.push({ r, d, z, pts, avg, sit, score: 50 + total, effSrc, defRank, defCount, pool, hay });
+      scored.push({ r, d, z, pts, avg, sit, score: 50 + total, defRank, defCount, pool, hay });
     }
     // Calibrate so the whole list really does average 50 with a spread of 10. The stat categories overlap
     // (a big yardage day also lifts yards per attempt and QBR), so their raw sum spreads wider than 10.
@@ -323,11 +303,10 @@
       case "yds": return `${int(r.yds)} passing yards`;
       case "td": return r.td === 0 ? "no touchdown passes" : plural(r.td, "touchdown pass").replace("passs", "passes");
       case "to": return d.to === 0 ? "no turnovers" : plural(d.to, "turnover");
-      case "eff": return s.effSrc === "qbr" ? `a ${one(r.qbr)} QBR` : `a ${one(d.rating)} passer rating`;
       case "cmp": return `${Math.round(d.cmpPct)}% completions`;
       case "ypa": return `${one(d.ypa)} yards per attempt`;
-      case "rush": return `${d.ryReal} rushing yards${r.rtd ? ` and ${plural(r.rtd, "rushing touchdown")}` : ""}`;
-      case "sk": return r.sk === 0 ? "no sacks taken" : plural(r.sk, "sack") + " taken";
+      case "ry": return `${d.ryReal} rushing yards`;
+      case "rtd": return plural(r.rtd, "rushing touchdown");
       case "def": return `${good ? "a tough" : "a soft"} ${nick(r.opp, r.season)} defense${s.defRank ? ` (#${s.defRank} of ${s.defCount} against quarterbacks that year)` : ""}`;
     }
     return key;
@@ -419,8 +398,8 @@
   function values(s) {
     const r = s.r, d = s.d;
     return {
-      yds: int(r.yds), td: String(r.td), to: String(d.to), eff: s.effSrc === "qbr" ? one(r.qbr) : one(d.rating), cmp: `${Math.round(d.cmpPct)}%`,
-      ypa: one(d.ypa), rush: `${d.ryReal} yds${r.rtd ? ` + ${r.rtd} TD` : ""}`, sk: String(r.sk), def: s.defRank ? `#${s.defRank} of ${s.defCount}` : "—",
+      yds: int(r.yds), td: String(r.td), to: String(d.to), cmp: `${Math.round(d.cmpPct)}%`,
+      ypa: one(d.ypa), ry: String(d.ryReal), rtd: String(r.rtd), def: s.defRank ? `#${s.defRank} of ${s.defCount}` : "—",
     };
   }
   const signed = (p) => (p === null || p === undefined ? "n/a" : (p >= 0 ? "+" : "−") + one(Math.abs(p)));
@@ -434,7 +413,7 @@
       if (a === undefined) return "—";
       if (k === "cmp") return `${Math.round(a)}%`;
       if (k === "yds") return int(a);
-      if (k === "rush") return `${Math.round(a)} yds`;
+      if (k === "ry") return `${Math.round(a)} yds`;
       if (k === "ypa") return one(a);
       return one(a);
     };
@@ -445,7 +424,7 @@
     };
     const line = (label, value, avg, p) => `<tr><td>${esc(label)}</td><td class="v">${esc(value)}</td><td class="v avg">${esc(avg)}</td>
       <td style="width:34%;padding-left:14px"><div class="bar">${bar(p)}</div></td><td class="v">${signed(p)}</td></tr>`;
-    const statRows = COMPONENTS.map((c) => line(c.key === "eff" ? (s.effSrc === "qbr" ? "QBR" : "Passer rating") : c.label, val[c.key], avgText(c.key), s.pts[c.key])).join("");
+    const statRows = COMPONENTS.map((c) => line(c.label, val[c.key], avgText(c.key), s.pts[c.key])).join("");
     const sitRows = s.sit.map((it) => line(it.label, it.detail, "", it.pts)).join("");
     const poolNote = s.pool === "season" ? `every other game of the ${r.season} season` : s.pool === "decade" ? `games from the ${Math.floor(r.season / 10) * 10}s, because the ${r.season} season is still young` : "every game on record";
     const countNote = r.benched
@@ -491,12 +470,12 @@
       const cls = (mine, other) => (mine > other + 0.05 ? "win" : mine < other - 0.05 ? "lose" : "");
       return `<tr><td class="${cls(x, y)}">${esc(ta)}<small>${signed(pa)}</small></td><th>${esc(label)}</th><td class="${cls(y, x)}">${esc(tb)}<small>${signed(pb)}</small></td></tr>`;
     };
-    let rows = COMPONENTS.map((c) => line(c.key === "eff" ? "QBR / rating" : c.label, va[c.key], a.pts[c.key], vb[c.key], b.pts[c.key])).join("");
-    const sitKeys = [["result", "Result"], ["stakes", "Stakes"], ["comeback", "Comeback"], ["gwd", "Game-winning drive"], ["venue", "Home or road"], ["weather", "Weather"], ["missing", "Missing targets"]];
+    let rows = COMPONENTS.map((c) => line(c.label, va[c.key], a.pts[c.key], vb[c.key], b.pts[c.key])).join("");
+    const sitKeys = [["result", "Result"], ["stakes", "Stakes"], ["comeback", "Comeback"], ["gwd", "Game-winning drive"], ["venue", "Road game"], ["weather", "Weather"], ["missing", "Missing targets"]];
     for (const [key, label] of sitKeys) {
       const ia = a.sit.find((it) => it.key === key), ib = b.sit.find((it) => it.key === key);
       if (!ia && !ib) continue;
-      const text = (it) => (!it ? "—" : key === "result" ? `${it.label.split(" ")[0]} ${it.detail}` : key === "gwd" ? "Yes" : key === "venue" ? it.label.split(" ")[0] : key === "stakes" ? it.label : it.detail);
+      const text = (it) => (!it ? "—" : key === "result" ? `Won ${it.detail}` : key === "gwd" ? "Yes" : key === "venue" ? "Road" : key === "stakes" ? it.label : it.detail);
       rows += line(label, text(ia), ia ? ia.pts : 0, text(ib), ib ? ib.pts : 0);
     }
     const gap = a.score - b.score, lead = gap >= 0 ? a : b, other = gap >= 0 ? b : a;
@@ -521,12 +500,12 @@
 
   /* ---------- start ---------- */
   async function start() {
-    const [games, qbr, players, teams] = await Promise.all([getJson("data/qb_games.json"), getJson("data/qbr.json"), getJson("data/players.json"), getJson("data/teams.json")]);
+    const [games, players, teams] = await Promise.all([getJson("data/qb_games.json"), getJson("data/players.json"), getJson("data/teams.json")]);
     if (!games || !games.rows) { $("status").textContent = "Could not load the game data. Try again in a minute."; return; }
     HEADS = (players && players.headshots) || {};
     TEAMS = (teams && teams.teams) || {};
     const rows = buildRows(games);
-    attachQbr(rows, qbr);
+
     const scored = computeModel(rows);
     const N = scored.length;
     const byId = new Map(scored.map((s) => [s.r.id, s]));
