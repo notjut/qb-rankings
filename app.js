@@ -47,25 +47,51 @@
     NE: "Patriots", NO: "Saints", NYG: "Giants", NYJ: "Jets", PHI: "Eagles", PIT: "Steelers", SEA: "Seahawks", SF: "49ers",
     TB: "Buccaneers", TEN: "Titans", WAS: "Commanders",
   };
-  const CANON = { WSH: "WAS", LAR: "LA", JAC: "JAX", GNB: "GB", KAN: "KC", NWE: "NE", NOR: "NO", SFO: "SF", TAM: "TB", SDG: "SD", LVR: "LV", RAI: "OAK", RAM: "LA", OTI: "TEN", CRD: "ARI", CLT: "IND", HTX: "HOU", RAV: "BAL" };
+  const CANON = { WSH: "WAS", LAR: "LA", JAC: "JAX", GNB: "GB", KAN: "KC", NWE: "NE", NOR: "NO", SFO: "SF", TAM: "TB", SDG: "SD", LVR: "LV", RAI: "OAK", RAM: "LA", OTI: "TEN", CRD: "ARI", CLT: "IND", HTX: "HOU", RAV: "BAL", PHO: "ARI", PHX: "ARI" };
   function normTeam(code, season) {
     let u = String(code || "").toUpperCase().trim();
     if (!u) return "UNK";
     u = CANON[u] || u;
     if (u === "OAK" && season >= 2020) u = "LV";
     if (u === "LV" && season < 2020) u = "OAK";
-    if (u === "LA" && season <= 2015) u = "STL";
+    if (u === "LA" && season >= 1995 && season <= 2015) u = "STL";
     if (u === "STL" && season > 2015) u = "LA";
     if (u === "SD" && season >= 2017) u = "LAC";
     if (u === "LAC" && season <= 2016) u = "SD";
     return u;
   }
+  // names for defunct teams and earlier identities, keyed by the abbreviation in the data
+  const OLD_NICK = {
+    PRT: "Spartans", BKN: "Dodgers", BDA: "Dodgers", BCL: "Colts", BOS: "Yanks", NYY: "Yanks", NYB: "Bulldogs", CHR: "Rockets", LAD: "Dons",
+    SIS: "Gunners", STL: "Gunners", DTX: "Texans", NYT: "Titans", MIA46: "Seahawks", CIN33: "Reds", CLE_RAMS: "Rams", HOU_OIL: "Oilers", TEN_OIL: "Oilers",
+    CHL: "Cardinals", ABU: "Steam Roller", PTB: "Steam Roller", BFF: "Bisons", CBD: "Bulldogs", CRA: "Rams", CST: "Stapletons", BRL: "Lions", BBA: "Braves",
+    CTI: "Tigers", CLI: "Indians", CLP: "Panthers", COL: "Tigers", RED: "Reds", CNC: "Celts", CIB: "Bulldogs", CHB: "Bears", CHT: "Tigers", CCL: "Cardinals", AKR: "Pros", ATN: "Yellow Jackets", BYK: "Yanks",
+  };
   function nick(code, season) {
-    if (code === "WAS") return season >= 2022 ? "Commanders" : season >= 2020 ? "Washington" : "Redskins";
-    return NICK[code] || code || "?";
+    if (code === "WAS") return season >= 2022 ? "Commanders" : season >= 2020 ? "Washington" : season <= 1932 ? "Braves" : "Redskins";
+    if (code === "TEN" && season <= 1998) return "Oilers";
+    if (code === "HOU" && season <= 1996) return "Oilers";
+    if (code === "CLE" && season <= 1945) return "Rams";
+    if (code === "CIN" && season <= 1940) return "Reds";
+    if (code === "MIA" && season <= 1946) return "Seahawks";
+    if (code === "BOS") return season <= 1936 ? "Redskins" : season >= 1960 ? "Patriots" : "Yanks";
+    if (code === "BUF" && season <= 1946) return "Bisons";
+    if (code === "STL") return season <= 1934 ? "Gunners" : season <= 1987 ? "Cardinals" : "Rams";
+    if (code === "BAL" && season <= 1983) return "Colts";
+    if (code === "CHH") return "Hornets";
+    if (code === "NYY" && season <= 1949) return "Yankees";
+    return NICK[code] || OLD_NICK[code] || code || "?";
   }
   let TEAMS = {};
-  function colors(code) {
+  function colors(code, season) {
+    // earlier identities borrow the colors of the franchise they became
+    if (code === "STL" && season <= 1987) code = "ARI";
+    if (code === "BAL" && season <= 1983) code = "IND";
+    if (code === "BOS") code = season >= 1960 ? "NE" : "WAS";
+    if (code === "DTX") code = "KC";
+    if (code === "NYT") code = "NYJ";
+    if (code === "PRT") code = "DET";
+    if (code === "HOU" && season <= 1996) code = "TEN";
     const t = TEAMS[code] || TEAMS[{ STL: "LA", SD: "LAC", OAK: "LV" }[code]] || {};
     return { c1: t.color || "#111111", c2: t.color2 || "#999999" };
   }
@@ -96,7 +122,7 @@
       f1: ix("sack_fumbles_lost"), f2: ix("rushing_fumbles_lost"), f3: ix("receiving_fumbles_lost"), ra: ix("carries"), ry: ix("rushing_yards"),
       rtd: ix("rushing_tds"), date: ix("gameday"), home: ix("home"), ts: ix("team_score"), os: ix("opp_score"), share: ix("snap_share"),
       neutral: ix("neutral"), roof: ix("roof"), temp: ix("temp"), wind: ix("wind"), precip: ix("precip"), gwd: ix("gwd"),
-      benched: ix("benched"), exitQ: ix("exit_qtr"), exitM: ix("exit_margin"), kneel: ix("kneel_yards"), missShare: ix("missing_share"), missNames: ix("missing_names"), comeback: ix("comeback"),
+      benched: ix("benched"), exitQ: ix("exit_qtr"), exitM: ix("exit_margin"), verified: ix("verified"), kneel: ix("kneel_yards"), missShare: ix("missing_share"), missNames: ix("missing_names"), comeback: ix("comeback"),
     };
     const g = (row, i) => (i < 0 ? null : row[i]);
     const out = [];
@@ -116,7 +142,7 @@
         date: g(row, I.date), home: num(g(row, I.home)), ts: num(g(row, I.ts)), os: num(g(row, I.os)), share: num(g(row, I.share)),
         neutral: num(g(row, I.neutral)) === 1, roof: g(row, I.roof), temp: num(g(row, I.temp)), wind: num(g(row, I.wind)), precip: g(row, I.precip),
         gwd: num(g(row, I.gwd)) === 1, benched: num(g(row, I.benched)) === 1, exitQ: num(g(row, I.exitQ)), exitM: num(g(row, I.exitM)),
-        kneel: num(g(row, I.kneel)) || 0, missShare: num(g(row, I.missShare)), missNames: g(row, I.missNames), comeback: num(g(row, I.comeback)) || 0,
+        verified: I.verified < 0 ? true : num(g(row, I.verified)) !== 0, kneel: num(g(row, I.kneel)) || 0, missShare: num(g(row, I.missShare)), missNames: g(row, I.missNames), comeback: num(g(row, I.comeback)) || 0,
         qbr: null,
       });
     }
@@ -155,7 +181,7 @@
       const won = r.ts > r.os;
       if (won) items.push({ key: "result", label: "Won the game", detail: `${r.ts}–${r.os}`, pts: SITUATION.win, phrase: "winning the game" });
       if (won && r.st === "POST") {
-        const sb = weekLabel(r) === "Super Bowl";
+        const sb = weekLabel(r) === "Super Bowl" || weekLabel(r) === "Championship game";
         items.push({ key: "stakes", label: sb ? "Super Bowl win" : "Playoff win", detail: weekLabel(r), pts: sb ? SITUATION.superBowlWin : SITUATION.playoffWin, phrase: sb ? "winning the Super Bowl" : "winning a playoff game" });
       }
     }
@@ -272,6 +298,7 @@
   function weekLabel(r) {
     if (r.st !== "POST") return `Week ${r.week}`;
     const i = r.week - (r.season >= 2021 ? 18 : 17);
+    if (r.season < 1966) return i >= 4 ? "Championship game" : i === 3 ? "Conference playoff" : "Playoffs";
     return ["Wild card", "Divisional round", "Conference championship", "Super Bowl"][i - 1] || "Playoffs";
   }
   function resultText(r) {
@@ -326,7 +353,7 @@
   /* ---------- pieces of page ---------- */
   let HEADS = {};
   function photo(s, width, stripe) {
-    const r = s.r, { c1, c2 } = colors(r.team);
+    const r = s.r, { c1, c2 } = colors(r.team, r.season);
     const initials = r.player.split(/\s+/).map((p) => p[0]).slice(0, 2).join("");
     let url = HEADS[r.pid] || "";
     if (url) url = url.replace("f_auto,q_auto", `f_auto,q_auto,w_${width}`);
@@ -404,7 +431,7 @@
   }
   const signed = (p) => (p === null || p === undefined ? "n/a" : (p >= 0 ? "+" : "−") + one(Math.abs(p)));
   function openSheet(s, N, actions) {
-    const r = s.r, { c1 } = colors(r.team);
+    const r = s.r, { c1 } = colors(r.team, r.season);
     const allPts = COMPONENTS.map((c) => s.pts[c.key] || 0).concat(s.sit.map((it) => it.pts));
     const maxPts = Math.max(8, ...allPts.map(Math.abs));
     const val = values(s);
@@ -427,7 +454,9 @@
     const statRows = COMPONENTS.map((c) => line(c.label, val[c.key], avgText(c.key), s.pts[c.key])).join("");
     const sitRows = s.sit.map((it) => line(it.label, it.detail, "", it.pts)).join("");
     const poolNote = s.pool === "season" ? `every other game of the ${r.season} season` : s.pool === "decade" ? `games from the ${Math.floor(r.season / 10) * 10}s, because the ${r.season} season is still young` : "every game on record";
-    const countNote = r.benched
+    const countNote = !r.verified
+      ? ` Play-by-play does not exist for games before 1999, so the full-game check could not be run${r.season < 1994 ? ", and fumbles were not recorded, so turnovers here are interceptions only" : ""}.`
+      : r.benched
       ? ` He started and was pulled in the ${ORD[r.exitQ] || "second half"}${r.exitQ ? " quarter" : ""} trailing by ${Math.abs(r.exitM)}, with no injury noted, so it counts.`
       : r.share !== null ? ` He took ${Math.round(r.share * 100)}% of his team's quarterback snaps, so it counts as a full game.` : "";
     const say = explain(s, N);
@@ -500,11 +529,11 @@
 
   /* ---------- start ---------- */
   async function start() {
-    const [games, players, teams] = await Promise.all([getJson("data/qb_games.json"), getJson("data/players.json"), getJson("data/teams.json")]);
+    const [games, old, players, teams] = await Promise.all([getJson("data/qb_games.json"), getJson("data/qb_games_pre1999.json"), getJson("data/players.json"), getJson("data/teams.json")]);
     if (!games || !games.rows) { $("status").textContent = "Could not load the game data. Try again in a minute."; return; }
     HEADS = (players && players.headshots) || {};
     TEAMS = (teams && teams.teams) || {};
-    const rows = buildRows(games);
+    const rows = buildRows(games).concat(old && old.rows ? buildRows(old) : []);
 
     const scored = computeModel(rows);
     const N = scored.length;
