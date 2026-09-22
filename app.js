@@ -16,9 +16,14 @@
     { key: "def", stat: null, label: "Defense faced", sign: 1 },
   ];
   const STAT_KEYS = ["yds", "ypa", "cmpPct", "td", "to", "rating", "qbr", "rush", "sk"];
+  const Z_CAP = 3;
   const MIN_ATT = 10, MIN_POOL = 60, MIN_DEF_GAMES = 6, FIRST_PAGE = 10, PAGE = 50, BIG_TIME = 70, RECENT_WEEKS = 4;
   // the situation: flat points added on top of the eight stat categories
   const SITUATION = { win: 2, loss: -2, road: 1, home: -1, gwd: 2, freezing: 2, wind: 2, precip: 1.5, weatherCap: 4, missingPerShare: 10, missingCap: 3 };
+  // the stakes: playoff rounds 1-4 (wild card to Super Bowl) add points for playing and more for winning
+  const STAKES = { play: [1, 1, 1.5, 2], win: [1, 1.5, 2, 4] };
+  // comebacks: points for the largest deficit overcome in a win
+  const COMEBACK = [[25, 4], [21, 3], [14, 2], [10, 1]];
 
   /* ---------- helpers ---------- */
   const $ = (id) => document.getElementById(id);
@@ -96,7 +101,7 @@
       f1: ix("sack_fumbles_lost"), f2: ix("rushing_fumbles_lost"), f3: ix("receiving_fumbles_lost"), ra: ix("carries"), ry: ix("rushing_yards"),
       rtd: ix("rushing_tds"), date: ix("gameday"), home: ix("home"), ts: ix("team_score"), os: ix("opp_score"), share: ix("snap_share"),
       neutral: ix("neutral"), roof: ix("roof"), temp: ix("temp"), wind: ix("wind"), precip: ix("precip"), gwd: ix("gwd"),
-      benched: ix("benched"), exitQ: ix("exit_qtr"), exitM: ix("exit_margin"), kneel: ix("kneel_yards"), missShare: ix("missing_share"), missNames: ix("missing_names"),
+      benched: ix("benched"), exitQ: ix("exit_qtr"), exitM: ix("exit_margin"), kneel: ix("kneel_yards"), missShare: ix("missing_share"), missNames: ix("missing_names"), comeback: ix("comeback"),
     };
     const g = (row, i) => (i < 0 ? null : row[i]);
     const out = [];
@@ -116,7 +121,7 @@
         date: g(row, I.date), home: num(g(row, I.home)), ts: num(g(row, I.ts)), os: num(g(row, I.os)), share: num(g(row, I.share)),
         neutral: num(g(row, I.neutral)) === 1, roof: g(row, I.roof), temp: num(g(row, I.temp)), wind: num(g(row, I.wind)), precip: g(row, I.precip),
         gwd: num(g(row, I.gwd)) === 1, benched: num(g(row, I.benched)) === 1, exitQ: num(g(row, I.exitQ)), exitM: num(g(row, I.exitM)),
-        kneel: num(g(row, I.kneel)) || 0, missShare: num(g(row, I.missShare)), missNames: g(row, I.missNames),
+        kneel: num(g(row, I.kneel)) || 0, missShare: num(g(row, I.missShare)), missNames: g(row, I.missNames), comeback: num(g(row, I.comeback)) || 0,
         qbr: null,
       });
     }
@@ -156,6 +161,16 @@
     if (r.ts !== null && r.os !== null && r.ts !== r.os) {
       const won = r.ts > r.os;
       items.push({ key: "result", label: won ? "Won the game" : "Lost the game", detail: `${r.ts}–${r.os}`, pts: won ? SITUATION.win : SITUATION.loss, phrase: won ? "winning the game" : "losing the game" });
+    }
+    if (r.st === "POST") {
+      const round = Math.min(4, Math.max(1, r.week - (r.season >= 2021 ? 18 : 17))), name = weekLabel(r);
+      const won = r.ts !== null && r.os !== null && r.ts > r.os;
+      const pts = STAKES.play[round - 1] + (won ? STAKES.win[round - 1] : 0);
+      items.push({ key: "stakes", label: won ? `${name} win` : name, detail: won ? "Playoff win" : "Playoff game", pts, phrase: won ? `winning ${round === 4 ? "the Super Bowl" : "a " + name.toLowerCase() + " game"}` : `${round === 4 ? "the Super Bowl" : "a playoff game"}` });
+    }
+    if (r.comeback >= COMEBACK[COMEBACK.length - 1][0]) {
+      const [, pts] = COMEBACK.find(([d]) => r.comeback >= d);
+      items.push({ key: "comeback", label: "Comeback win", detail: `Trailed by ${r.comeback}`, pts, phrase: `a comeback from ${r.comeback} down` });
     }
     if (r.gwd) items.push({ key: "gwd", label: "Game-winning drive", detail: "Took the lead for good late", pts: SITUATION.gwd, phrase: "a game-winning drive" });
     if (!r.neutral && r.home !== null) {
@@ -228,7 +243,8 @@
         if (!b || !b.sd) return null;
         if (!pool) pool = b.pool;
         avg[key] = b.m;
-        return (v - b.m) / b.sd;
+        const zz = (v - b.m) / b.sd;
+        return key === "ypa" ? clamp(zz, -Z_CAP, Z_CAP) : zz; // a rate stat runs wild on a few attempts, so it is capped
       };
       z.yds = zv("yds", "yds", r.yds); z.cmp = zv("cmp", "cmpPct", d.cmpPct); z.td = zv("td", "td", r.td); z.to = zv("to", "to", d.to);
       let effSrc = "qbr";
@@ -254,15 +270,17 @@
     }
     // Calibrate so the whole list really does average 50 with a spread of 10. The stat categories overlap
     // (a big yardage day also lifts yards per attempt and QBR), so their raw sum spreads wider than 10.
+    // Only the stat rows are rescaled, so the situation and stakes points keep their face values.
     const n = scored.length;
-    const mean = scored.reduce((a, s) => a + s.score, 0) / n;
-    const sd = Math.sqrt(scored.reduce((a, s) => a + (s.score - mean) * (s.score - mean), 0) / n) || 10;
+    const statTotal = (s) => COMPONENTS.reduce((a, c) => a + (s.pts[c.key] || 0), 0);
+    const mean = scored.reduce((a, s) => a + statTotal(s), 0) / n;
+    const sd = Math.sqrt(scored.reduce((a, s) => a + (statTotal(s) - mean) ** 2, 0) / n) || 10;
     const k = 10 / sd;
+    const floor = 50 - mean * k;
     for (const s of scored) {
       for (const key in s.pts) if (s.pts[key] !== null) s.pts[key] *= k;
-      for (const it of s.sit) it.pts *= k;
-      s.base = 50 - (mean - 50) * k; // where a game with zero points in every row lands
-      s.score = s.base + (s.score - 50) * k;
+      s.base = floor; // where a game with zero points in every row lands
+      s.score = floor + statTotal(s) + s.sit.reduce((a, it) => a + it.pts, 0);
     }
     scored.sort((a, b) => b.score - a.score || b.r.yds - a.r.yds);
     scored.forEach((s, i) => { s.rank = i + 1; });
@@ -290,7 +308,8 @@
   }
   function tags(r) {
     const t = [], outside = r.roof === "outdoors" || r.roof === "open";
-    if (r.gwd) t.push("Game-winning drive");
+    if (r.comeback >= 14) t.push(`Comeback from ${r.comeback} down`);
+    else if (r.gwd) t.push("Game-winning drive");
     if (outside && r.temp !== null && r.temp <= 32) t.push(`${Math.round(r.temp)}°F`);
     if (outside && r.precip) t.push(r.precip);
     if (r.benched) t.push("Benched");
@@ -473,11 +492,11 @@
       return `<tr><td class="${cls(x, y)}">${esc(ta)}<small>${signed(pa)}</small></td><th>${esc(label)}</th><td class="${cls(y, x)}">${esc(tb)}<small>${signed(pb)}</small></td></tr>`;
     };
     let rows = COMPONENTS.map((c) => line(c.key === "eff" ? "QBR / rating" : c.label, va[c.key], a.pts[c.key], vb[c.key], b.pts[c.key])).join("");
-    const sitKeys = [["result", "Result"], ["gwd", "Game-winning drive"], ["venue", "Home or road"], ["weather", "Weather"], ["missing", "Missing targets"]];
+    const sitKeys = [["result", "Result"], ["stakes", "Stakes"], ["comeback", "Comeback"], ["gwd", "Game-winning drive"], ["venue", "Home or road"], ["weather", "Weather"], ["missing", "Missing targets"]];
     for (const [key, label] of sitKeys) {
       const ia = a.sit.find((it) => it.key === key), ib = b.sit.find((it) => it.key === key);
       if (!ia && !ib) continue;
-      const text = (it) => (!it ? "—" : key === "result" ? `${it.label.split(" ")[0]} ${it.detail}` : key === "gwd" ? "Yes" : key === "venue" ? it.label.split(" ")[0] : it.detail);
+      const text = (it) => (!it ? "—" : key === "result" ? `${it.label.split(" ")[0]} ${it.detail}` : key === "gwd" ? "Yes" : key === "venue" ? it.label.split(" ")[0] : key === "stakes" ? it.label : it.detail);
       rows += line(label, text(ia), ia ? ia.pts : 0, text(ib), ib ? ib.pts : 0);
     }
     const gap = a.score - b.score, lead = gap >= 0 ? a : b, other = gap >= 0 ? b : a;
