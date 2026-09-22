@@ -407,6 +407,48 @@
       <h3 class="subhead" style="margin-top:0">Big-time performances</h3>${grid(picks, N)}` +
       (worst.length ? `<h3 class="subhead">Worst of the last ${RECENT_WEEKS} weeks</h3>${grid(worst, N)}` : "");
   }
+  const GOAT_BAR = 70, GOAT_HIGH = 80, GOAT_COUNT = 150, GOAT_FIRST = 25;
+  function buildGoats(scored) {
+    const byName = new Map();
+    for (const s of scored) {
+      const key = s.r.player.toLowerCase().replace(/[^a-z]/g, "");
+      let p = byName.get(key);
+      if (!p) { p = { name: s.r.player, games: 0, great: 0, historic: 0, sum: 0, best: s, first: s.r.season, last: s.r.season, teams: new Map(), photoGame: null }; byName.set(key, p); }
+      p.games++; p.sum += s.score;
+      if (s.score >= GOAT_BAR) p.great++;
+      if (s.score >= GOAT_HIGH) p.historic++;
+      if (s.score > p.best.score) p.best = s;
+      if (s.r.season < p.first) p.first = s.r.season;
+      if (s.r.season > p.last) p.last = s.r.season;
+      p.teams.set(s.r.team, (p.teams.get(s.r.team) || 0) + 1);
+      if (!p.photoGame || (HEADS[s.r.pid] && !HEADS[p.photoGame.r.pid])) p.photoGame = s;
+    }
+    const list = [...byName.values()].filter((p) => p.great > 0);
+    list.sort((a, b) => b.great - a.great || b.historic - a.historic || b.sum / b.games - a.sum / a.games);
+    return list.slice(0, GOAT_COUNT).map((p, i) => ({ ...p, rank: i + 1, avg: p.sum / p.games, mainTeam: [...p.teams.entries()].sort((x, y) => y[1] - x[1])[0][0] }));
+  }
+  function goatRow(p) {
+    const s = p.photoGame, r = s.r;
+    return `<div class="g goat"><span class="rank">#${p.rank}</span>${photo({ r: { ...r, team: p.mainTeam, season: p.last } }, 96, false)}
+      <span style="min-width:0"><button type="button" class="nm goat-name" data-player="${esc(p.name)}" style="display:block">${esc(p.name)}</button>
+      <span class="sub" style="display:block">${esc(nick(p.mainTeam, p.last))} · ${p.first === p.last ? p.first : `${p.first}–${p.last}`} · ${plural(p.games, "game")} · avg ${one(p.avg)}</span>
+      <span class="line" style="display:block">Best: <button type="button" data-id="${esc(r.id === p.best.r.id ? r.id : p.best.r.id)}" style="border-bottom:1px solid currentColor">${one(p.best.score)} ${esc(matchup(p.best.r))}, ${esc(when(p.best.r))}</button></span></span>
+      <span class="sc" title="Games rated ${GOAT_BAR} or higher">${p.great}<small style="display:block;font-size:10px;color:var(--mute)">${p.historic} at ${GOAT_HIGH}+</small></span></div>`;
+  }
+  function renderGoats(scored) {
+    const goats = buildGoats(scored);
+    let limit = GOAT_FIRST;
+    const draw = () => {
+      $("goatsBody").innerHTML = `<h2>GOATs <span>The ${goats.length} greatest quarterbacks ever</span></h2>
+        <p class="meta" style="margin:-16px 0 24px">Ranked by how many games each man played that rate ${GOAT_BAR} or higher, one of the best games of that season. Ties go to games at ${GOAT_HIGH}+, then career average. The big number is the count.</p>
+        <div class="list">${goats.slice(0, limit).map(goatRow).join("")}</div>
+        ${limit < goats.length ? `<button type="button" class="more" id="moreGoats">Show ${Math.min(50, goats.length - limit)} more</button>` : ""}`;
+      const btn = $("moreGoats");
+      if (btn) btn.onclick = () => { limit += 50; draw(); };
+    };
+    draw();
+    return goats;
+  }
   function renderWorst(scored, N) {
     const worst = scored.slice(-8).reverse();
     $("worstBody").innerHTML = `<h2>Worst of all time <span>The bottom of ${int(N)} games</span></h2>${grid(worst, N)}
@@ -547,6 +589,7 @@
     const shown = renderWeek(scored, N, latest);
     renderRecent(scored, N, latest, shown);
     renderWorst(scored, N);
+    renderGoats(scored);
 
     const state = { q: "", season: "", type: "", order: "best", limit: FIRST_PAGE };
     $("fSeason").innerHTML = `<option value="">All seasons</option>` + seasons.map((y) => `<option value="${y}">${y}</option>`).join("");
@@ -581,6 +624,7 @@
       $("all").scrollIntoView();
     };
     $("fullWorst").addEventListener("click", () => setFilters("", "worst"));
+    document.addEventListener("click", (e) => { const el = e.target.closest("[data-player]"); if (el) setFilters(el.dataset.player, "best"); });
 
     let compareA = null;
     const bar = $("cmpbar");
